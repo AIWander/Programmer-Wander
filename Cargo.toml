@@ -2,7 +2,7 @@
 name = "programmer"
 version = "0.1.0-alpha"
 edition = "2021"
-authors = ["Joseph Wander <josephwander@gmail.com>"]
+authors = ["Joseph Wander <contact@aiwander.ai>"]
 license = "Apache-2.0"
 description = "MCP server giving any AI a complete Rust + Windows dev shell"
 repository = "https://github.com/AIWander/Programmer-Wander"

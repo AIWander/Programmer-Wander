@@ -2,7 +2,10 @@
 
 > An MCP server that gives any AI a complete Rust + Windows dev shell.
 
-**Status:** alpha. Built for [Claude Desktop](https://claude.ai/download), [Cowork](https://claude.ai/cowork), [LM Studio](https://lmstudio.ai), [Claude Code](https://claude.ai/code), and any host that speaks MCP.
+**Status:** free, public, and alpha. Built for [Claude Desktop](https://claude.ai/download), [Cowork](https://claude.ai/cowork), [LM Studio](https://lmstudio.ai), [Claude Code](https://claude.ai/code), and any host that speaks MCP.
+
+**Part of [CPC](https://github.com/AIWander) (Copy Paste Compute).** Programmer-Wander is
+one member of the free core trio alongside AI-Hands and Voice-Command.
 
 [![Build](https://github.com/AIWander/Programmer-Wander/actions/workflows/build.yml/badge.svg)](https://github.com/AIWander/Programmer-Wander/actions)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
@@ -132,7 +135,9 @@ Requires Rust 1.75+.
 
 ## Companion: AIWander/Universal-Ops
 
-Programmer-Wander is the **dev shell** for a single AI. If you want a **multi-AI orchestrator** (manager + ops + dashboard) that pairs with Claude Desktop / Cowork and brings in the smartest available coding agent on demand, see [AIWander/Universal-Ops](https://github.com/AIWander/Universal-Ops).
+Programmer-Wander is the **dev shell** for a single AI. The separate manager and dashboard
+products are **Beta and coming soon**; their active test surface is
+[manager-universal](https://github.com/AIWander/manager-universal).
 
 The two repos are independent — you can install either, both, or neither.
 
