@@ -63,9 +63,9 @@ Install `programmer.exe` first, then add this repository through the local host'
 
 1. Download `programmer-windows-x64.msi` from [Releases](https://github.com/AIWander/Programmer-Wander/releases/latest)
 2. Run the MSI (UAC prompt; click Allow)
-3. The installer registers detected hosts as a broad install path
-4. For single-host registration, use the portable option above
-5. Restart your AI host
+3. The MSI installs `programmer.exe` and adds its directory to `PATH`; it does not modify AI-host configuration
+4. In a new terminal, run `programmer.exe install --target <host>` for each host you explicitly want to register
+5. Restart only the host whose configuration you changed
 
 ### Option 3 — Have your AI install it for you
 
