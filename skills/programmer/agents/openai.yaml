@@ -1,0 +1,4 @@
+interface:
+  display_name: "Programmer"
+  short_description: "Run local development work by ability"
+  default_prompt: "Use $programmer to inspect, change, and verify this local project."

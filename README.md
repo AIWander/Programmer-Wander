@@ -15,21 +15,18 @@ one member of the free core trio alongside AI-Hands and Voice-Command.
 
 `programmer` is a single-binary MCP server that exposes a Rust developer's toolbox to any AI:
 
-| Category | Tools |
-|---|---|
-| **Files** | read_file, write_file, append_file, copy_file, move_file, create_dir, diff_file, file_stats, get_file_info, edit_block |
-| **Shells** | bash, powershell, run, smart_exec, chain |
-| **Git (full)** | branch, checkout, clone, commit, diff, diff_summary, log, pull, push, remote, reset, stash, status |
-| **WSL** | wsl_run, wsl_bg, wsl_log, wsl_status |
-| **HTTP** | http_request, http_download, http_fetch, http_scrape |
-| **Watchers** | watch_resource, list_watch, stop_watch |
-| **Webhooks** | webhook_add_route, webhook_list, webhook_start, webhook_stop |
-| **Persistent shells** | psession_create, psession_destroy, psession_history, psession_list, psession_read, psession_run |
-| **Sessions** | session_*, session_history, session_checkpoint, session_recover |
-| **Transforms** | grep, find_replace, extract_lines, json_format, csv↔json, base64_*, hash_file, bulk_rename, scaffold, sync_dir |
-| **Utility** | screenshot, port_check, kill_process, list_process, archive_*, sqlite_query, md2docx, notify, clipboard_*, registry_read |
+| Ability group | Count | Purpose |
+|---|---:|---|
+| **Files and text** | 18 | Read, edit, search, inspect, archive, and convert local files |
+| **Shells and sessions** | 28 | One-shot, persistent, shortcut, and recovery-aware command execution |
+| **Git** | 12 | Local and remote repository workflows |
+| **WSL** | 4 | Foreground and background Linux execution from Windows |
+| **HTTP and webhooks** | 8 | Requests, downloads, scraping, ports, and local callback routes |
+| **Transformations and search** | 14 | Bulk, structured-data, encoding, scaffold, and search operations |
+| **System and monitoring** | 14 | Processes, watchers, clipboard, registry, SQLite, screenshots, and notifications |
+| **Security, infrastructure, and planning** | 7 | Command checks, audits, health, fallback, deployment preflight, and plans |
 
-~80 tools total. No external dependencies. Single static-linked .exe. Works standalone — does not require any other MCP server.
+105 tools in the current source registry. No external dependencies. Single static-linked .exe. Works standalone — does not require any other MCP server.
 
 ## Safety model
 
@@ -40,6 +37,15 @@ Command-entry tools (`run`, `bash`, `powershell`, `smart_exec`, `chain`, `psessi
 AIWander tools are local, user-authorized MCP capability surfaces. They do not grant an AI new permissions by themselves. They expose tools the user explicitly installs and enables. Sensitive actions should be confirmed by the user, credentials should stay in the OS keyring or local vault, and demos should use mock data.
 
 ## Install
+
+### Optional plugin surface
+
+The repository root is also a Codex- and Claude-compatible plugin package. It includes two skills with separate jobs:
+
+- `programmer-getting-started` installs, connects, verifies, and troubleshoots the MCP process.
+- `programmer` routes active development work across the 105-tool contract by ability.
+
+Install `programmer.exe` first, then add this repository through the local host's plugin flow. The included `.mcp.json` uses `programmer.exe` from `PATH`, so it contains no machine-specific user path. The plugin does not silently modify another AI's hooks or config; see [the host application guide](instructions/APPLY_TO_AI_HOSTS.md) for host-specific guidance.
 
 ### Option 1 — Portable (recommended)
 
@@ -57,9 +63,9 @@ AIWander tools are local, user-authorized MCP capability surfaces. They do not g
 
 1. Download `programmer-windows-x64.msi` from [Releases](https://github.com/AIWander/Programmer-Wander/releases/latest)
 2. Run the MSI (UAC prompt; click Allow)
-3. The installer registers detected hosts as a broad install path
-4. For single-host registration, use the portable option above
-5. Restart your AI host
+3. The MSI installs `programmer.exe` and adds its directory to `PATH`; it does not modify AI-host configuration
+4. In a new terminal, run `programmer.exe install --target <host>` for each host you explicitly want to register
+5. Restart only the host whose configuration you changed
 
 ### Option 3 — Have your AI install it for you
 
@@ -120,7 +126,7 @@ Remove-Item C:\tools\programmer -Recurse -Force
 
 ## State directory
 
-`programmer` keeps its state (breadcrumbs, file watchers, session checkpoints) in `./.programmer/` relative to the exe. This makes the install fully portable — copy the exe + its `./.programmer/` folder to a different machine and your state goes with it.
+`programmer` keeps its local session state, file watchers, and recovery checkpoints in `./.programmer/` relative to the exe. This makes the install fully portable — copy the exe + its `./.programmer/` folder to a different machine and your state goes with it.
 
 ## Build from source
 
