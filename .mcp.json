@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "programmer-wander": {
+      "command": "programmer.exe",
+      "args": ["serve"],
+      "env": {}
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "programmer-wander",
+  "version": "0.1.0-alpha",
+  "description": "Programmer-Wander skills and MCP registration for local Windows development work.",
+  "author": {
+    "name": "AIWander",
+    "url": "https://github.com/AIWander"
+  },
+  "homepage": "https://github.com/AIWander/Programmer-Wander",
+  "repository": "https://github.com/AIWander/Programmer-Wander",
+  "license": "Apache-2.0"
+}

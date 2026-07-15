@@ -1,0 +1,4 @@
+interface:
+  display_name: "Programmer Getting Started"
+  short_description: "Install and connect Programmer-Wander safely"
+  default_prompt: "Use $programmer-getting-started to connect Programmer-Wander to this AI host."
