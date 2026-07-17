@@ -2,6 +2,8 @@
 
 Install the matching x64 or ARM64 Rust release first and make `programmer.exe` available on `PATH`. This package does not silently edit another AI's configuration or hooks.
 
+For optional CPC lifecycle layering, read [UniversalAI Integration](UNIVERSALAI_INTEGRATION.md).
+
 ## Codex
 
 Install the repository root through Codex's plugin flow. The host can then discover `.codex-plugin/plugin.json`, `.mcp.json`, and both skills. Start a fresh task if the current one does not refresh plugin tools.
