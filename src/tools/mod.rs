@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 
 /// Get all tool definitions for MCP tools/list
 pub fn get_tool_definitions() -> Vec<Value> {
-    let defs = vec![
+    let mut defs = vec![
         // ============ FILE OPERATIONS ============
         json!({
             "name": "read_file",
@@ -937,6 +937,58 @@ pub fn get_tool_definitions() -> Vec<Value> {
         json!({"name": "tail_file", "description": "Return last N lines of a file plus current byte offset. Pass since_bytes from a previous call to get only NEW content (delta polling).", "inputSchema": {"type": "object", "properties": {"path": {"type": "string", "description": "File path to tail"}, "lines": {"type": "integer", "description": "Number of lines to return (default: 50)", "default": 50}, "since_bytes": {"type": "integer", "description": "Byte offset from previous call. 0 = read from end.", "default": 0}}, "required": ["path"]}}),
         json!({"name": "notify", "description": "Show a silent Windows toast notification.", "inputSchema": {"type": "object", "properties": {"title": {"type": "string", "description": "Notification title"}, "body": {"type": "string", "description": "Notification body"}, "icon": {"type": "string", "enum": ["info", "warning", "error"], "default": "info"}, "duration_ms": {"type": "integer", "default": 5000}}, "required": ["title", "body"]}}),
     ];
+
+    // Category post-pass: stable-sort the flat list into the workbench sequence
+    // (Files -> Search -> Shell -> Git -> Sessions -> Background -> Net -> Data
+    // -> System -> Guard -> Plan) and tag each description so hosts that render
+    // tools as one flat list still read grouped. Tool names never change.
+    fn category_of(name: &str) -> (usize, &'static str) {
+        if name.starts_with("git_") {
+            return (4, "Git");
+        }
+        if name.starts_with("session_") || name.starts_with("psession_") {
+            return (5, "Sessions");
+        }
+        if name.starts_with("wsl_")
+            || name.starts_with("webhook_")
+            || matches!(name, "watch_resource" | "stop_watch" | "list_watch" | "get_alert")
+        {
+            return (6, "Background");
+        }
+        if name.starts_with("http_") || name == "port_check" {
+            return (7, "Net");
+        }
+        if name.starts_with("transform_")
+            || name.starts_with("archive_")
+            || matches!(name, "sqlite_query" | "md2docx")
+        {
+            return (8, "Data");
+        }
+        match name {
+            "read_file" | "write_file" | "append_file" | "edit_block" | "copy_file"
+            | "move_file" | "create_dir" | "list_dir" | "get_file_info" | "file_stats"
+            | "diff_file" | "tail_file" | "extract_lines" => (1, "Files"),
+            "grep" | "search_start" | "search_file" | "smart_read" => (2, "Search"),
+            "bash" | "powershell" | "run" | "chain" | "smart_exec" | "shortcut"
+            | "list_shortcut" | "shortcut_chain" => (3, "Shell"),
+            "screenshot" | "system_info" | "clipboard_read" | "clipboard_write"
+            | "list_process" | "kill_process" | "registry_read" | "notify"
+            | "server_health" => (9, "System"),
+            "security_check_cmd" | "security_audit_log" | "deploy_preflight"
+            | "tool_fallback" | "config_validate_mcp" => (10, "Guard"),
+            "plan" | "plan_assemble" => (11, "Plan"),
+            _ => (12, "Utility"),
+        }
+    }
+
+    for def in defs.iter_mut() {
+        let name = def["name"].as_str().unwrap_or("").to_string();
+        let (_, label) = category_of(&name);
+        if let Some(desc) = def["description"].as_str() {
+            def["description"] = json!(format!("[{label}] {desc}"));
+        }
+    }
+    defs.sort_by_key(|def| category_of(def["name"].as_str().unwrap_or("")).0);
     defs
 }
 

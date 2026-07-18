@@ -1,6 +1,6 @@
 [package]
 name = "programmer"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 edition = "2021"
 authors = ["Joseph Wander <contact@aiwander.ai>"]
 license = "Apache-2.0"
@@ -60,6 +60,10 @@ flate2 = "1"
 
 # CLI subcommand parsing
 dirs = "5"
+
+[build-dependencies]
+# Embeds assets/programmer.ico + version metadata into the .exe (Windows only)
+winresource = "0.1"
 
 [profile.release]
 opt-level = 3

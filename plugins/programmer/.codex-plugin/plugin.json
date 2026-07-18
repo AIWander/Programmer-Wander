@@ -1,0 +1,22 @@
+{
+  "name": "programmer",
+  "version": "0.2.0",
+  "description": "Operate the Programmer-Wander dev shell with five skills and optional reviewed guard-hook templates.",
+  "author": {
+    "name": "AIWander"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Programmer",
+    "shortDescription": "Use the Programmer-Wander dev shell with optional reviewed guard hooks.",
+    "longDescription": "Use an existing programmer MCP connection as a full Rust + Windows dev shell: 105 tools organized into 11 categories covering files, search, shells, git, persistent sessions, background jobs, HTTP, transforms, system access, safety guards, and planning. Optional inert hook templates add destructive-command denial, MCP-server-kill protection, and archive-first warnings after user review.",
+    "developerName": "AIWander",
+    "category": "Developer Tools",
+    "capabilities": ["file and code editing", "shell and persistent sessions", "full git", "WSL and background jobs", "watchers and webhooks", "safety guard hooks"],
+    "defaultPrompt": [
+      "Fix this bug and commit the change.",
+      "Build the project and show me the errors.",
+      "Watch this folder and tell me when it changes."
+    ]
+  }
+}

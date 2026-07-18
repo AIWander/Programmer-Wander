@@ -1,0 +1,14 @@
+{
+  "description": "Optional Programmer-Wander guard hooks for Codex CLI hosts",
+  "hooks": {
+    "SessionStart": [
+      {"hooks": [{"type": "command", "command": "python \"__PLUGIN_ROOT__/hooks/opt-in/adapters/codex/hook_adapter.py\" --event SessionStart", "timeout": 5}]}
+    ],
+    "PreToolUse": [
+      {"matcher": "mcp__programmer__.*|programmer__.*", "hooks": [{"type": "command", "command": "python \"__PLUGIN_ROOT__/hooks/opt-in/adapters/codex/hook_adapter.py\" --event PreToolUse", "timeout": 5}]}
+    ],
+    "PostToolUseFailure": [
+      {"matcher": "mcp__programmer__.*|programmer__.*", "hooks": [{"type": "command", "command": "python \"__PLUGIN_ROOT__/hooks/opt-in/adapters/codex/hook_adapter.py\" --event PostToolUseFailure", "timeout": 5}]}
+    ]
+  }
+}

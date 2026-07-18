@@ -1,0 +1,10 @@
+{
+  "name": "programmer",
+  "version": "0.2.0",
+  "description": "Operate the Programmer-Wander dev shell with five skills and optional reviewed guard-hook templates.",
+  "author": {
+    "name": "AIWander"
+  },
+  "repository": "https://github.com/AIWander/Programmer-Wander",
+  "keywords": ["mcp", "dev-shell", "rust", "windows", "git", "wsl", "hooks"]
+}

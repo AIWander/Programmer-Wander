@@ -1,0 +1,10 @@
+{
+  "name": "programmer-skills",
+  "version": "0.2.0",
+  "description": "Five Programmer-Wander dev-shell skills with no hook code.",
+  "author": {
+    "name": "AIWander"
+  },
+  "repository": "https://github.com/AIWander/Programmer-Wander",
+  "keywords": ["mcp", "dev-shell", "rust", "windows", "git", "wsl", "skills"]
+}

@@ -26,7 +26,9 @@ one member of the free core trio alongside AI-Hands and Voice-Command.
 | **System and monitoring** | 14 | Processes, watchers, clipboard, registry, SQLite, screenshots, and notifications |
 | **Security, infrastructure, and planning** | 7 | Command checks, audits, health, fallback, deployment preflight, and plans |
 
-105 tools in the current source registry. No external dependencies. Single static-linked .exe. Works standalone — does not require any other MCP server.
+105 tools in the current source registry, each description tagged with its category (`[Files]`, `[Git]`, `[Guard]`, ...) and listed in a curated workbench order, so tool lists read grouped in any host. No external dependencies. Single static-linked .exe. Works standalone — does not require any other MCP server.
+
+Plugin profiles for skill/hook installs live in [`plugins/`](plugins/): `programmer` (five skills + inert, reviewable guard-hook templates) and `programmer-skills` (skills only). These are marketplace-style profiles; the repository root is additionally its own plugin package (see "Optional plugin surface" below).
 
 ## Safety model
 
