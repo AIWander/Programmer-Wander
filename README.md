@@ -141,13 +141,15 @@ cargo build --release
 
 Requires Rust 1.75+.
 
-## Companion: AIWander/Universal-Ops
+## Upgrade: UniMan ($5)
 
-Programmer-Wander is the **dev shell** for a single AI. The separate manager and dashboard
-products are **Beta and coming soon**; their active test surface is
-[manager-universal](https://github.com/AIWander/manager-universal).
+Programmer-Wander is the **free dev shell** for a single AI, and stays free. The paid
+upgrade is **UniMan** — a universal manager that delegates work to Claude Code, Codex
+CLI, and Grok Build CLI, plus a live local dashboard that covers both products: it
+detects a Programmer-Wander install automatically and shows it alongside your
+delegated sessions. Get it at [aiwander.ai](https://aiwander.ai).
 
-The two repos are independent — you can install either, both, or neither.
+The two products are independent — Programmer-Wander works fully on its own.
 
 ## License
 
