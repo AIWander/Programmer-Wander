@@ -28,7 +28,12 @@ one member of the free core trio alongside AI-Hands and Voice-Command.
 
 105 tools in the current source registry, each description tagged with its category (`[Files]`, `[Git]`, `[Guard]`, ...) and listed in a curated workbench order, so tool lists read grouped in any host. No external dependencies. Single static-linked .exe. Works standalone — does not require any other MCP server.
 
-Plugin profiles for skill/hook installs live in [`plugins/`](plugins/): `programmer` (five skills + inert, reviewable guard-hook templates) and `programmer-skills` (skills only). These are marketplace-style profiles; the repository root is additionally its own plugin package (see "Optional plugin surface" below).
+Skills and optional guard hooks ship from the companion repository
+[AIWander/aiprogrammer](https://github.com/AIWander/aiprogrammer) — install with
+`claude plugin marketplace add AIWander/aiprogrammer`, then pick either the `programmer`
+profile (five skills plus inert, reviewable guard-hook templates) or `programmer-skills`
+(skills only). The repository root here is additionally its own plugin package (see
+"Optional plugin surface" below).
 
 ## Safety model
 
@@ -51,7 +56,7 @@ Install `programmer.exe` first, then add this repository through the local host'
 
 ### Option 1 — Portable (recommended)
 
-1. Download `programmer-windows-x64.zip` (or `arm64`) from [Releases](https://github.com/AIWander/Programmer-Wander/releases/latest)
+1. Download `programmer-wander-windows-x64.zip` (or `arm64`) from [Releases](https://github.com/AIWander/Programmer-Wander/releases/latest)
 2. Extract to a stable folder, e.g. `C:\tools\programmer\`
 3. Register with your AI host:
    ```powershell
@@ -63,7 +68,7 @@ Install `programmer.exe` first, then add this repository through the local host'
 
 ### Option 2 — MSI installer
 
-1. Download `programmer-windows-x64.msi` from [Releases](https://github.com/AIWander/Programmer-Wander/releases/latest)
+1. Download `programmer-wander-windows-x64.msi` from [Releases](https://github.com/AIWander/Programmer-Wander/releases/latest)
 2. Run the MSI (UAC prompt; click Allow)
 3. The MSI installs `programmer.exe` and adds its directory to `PATH`; it does not modify AI-host configuration
 4. In a new terminal, run `programmer.exe install --target <host>` for each host you explicitly want to register
@@ -95,7 +100,7 @@ Write-Host "Arch: $arch | Hosts detected: $($hosts -join ', ')"
 ### 2. Download latest release (portable)
 
 ```powershell
-$url = "https://github.com/AIWander/Programmer-Wander/releases/latest/download/programmer-windows-$arch.zip"
+$url = "https://github.com/AIWander/Programmer-Wander/releases/latest/download/programmer-wander-windows-$arch.zip"
 Invoke-WebRequest $url -OutFile $env:TEMP\programmer.zip
 New-Item -ItemType Directory -Force -Path C:\tools\programmer | Out-Null
 Expand-Archive $env:TEMP\programmer.zip -DestinationPath C:\tools\programmer -Force
