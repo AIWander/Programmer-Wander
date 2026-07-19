@@ -1,14 +1,12 @@
-# Plugins
+# Plugins have moved
 
-Install exactly one current Programmer-Wander profile.
+The Programmer plugin kit (five skills, opt-in guard hooks, dual
+marketplace profiles) now lives in its own canonical repository:
 
-| Plugin | Purpose |
-| --- | --- |
-| `programmer` | Five skills plus inert guard-hook templates for hosts that can review, trust, and probe hooks |
-| `programmer-skills` | The same five skills with no hook code |
+**https://github.com/AIWander/aiprogrammer**
 
-Both profiles expect an existing `programmer` MCP connection (register the
-server with `programmer.exe install --target <host>`). Neither profile installs
-an MCP endpoint, edits host configuration, swaps a binary, or restarts the
-server. Hook wiring in the `programmer` profile is an explicit user step via
-`scripts/render-hooks.ps1` after reviewing the policy source.
+Install via your host plugin flow, e.g. for Claude Code:
+
+    claude plugin marketplace add AIWander/aiprogrammer
+
+This repository remains the home of the programmer.exe MCP server itself.
