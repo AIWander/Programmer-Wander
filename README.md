@@ -54,7 +54,24 @@ The repository root is also a Codex- and Claude-compatible plugin package. It in
 
 Install `programmer.exe` first, then add this repository through the local host's plugin flow. The included `.mcp.json` uses `programmer.exe` from `PATH`, so it contains no machine-specific user path. The plugin does not silently modify another AI's hooks or config; see [the host application guide](instructions/APPLY_TO_AI_HOSTS.md) for host-specific guidance.
 
-### Option 1 — Portable (recommended)
+### Option 1 — Signed installer (recommended)
+
+Two flavors, both Authenticode-signed. Pick one from
+[Releases](https://github.com/AIWander/Programmer-Wander/releases/latest):
+
+| Installer | What it installs |
+|---|---|
+| `Programmer-Wander-Setup-x64.exe` (or `-arm64`) | **With plugins** — the server, the five skills, and both plugin profiles |
+| `Programmer-Wander-Setup-x64-server-only.exe` | **Without plugins** — the server alone, nothing written to `~/.claude/skills` |
+
+Either flavor detects your AI hosts, offers to register Claude Desktop and Claude
+Code for you, and opens a short onboarding page when it finishes. They share an
+install identity, so one upgrades the other. Restart any host whose configuration
+changed.
+
+Chose server-only and want the skills later? `claude plugin marketplace add AIWander/aiprogrammer`.
+
+### Option 2 — Portable zip
 
 1. Download `programmer-wander-windows-x64.zip` (or `arm64`) from [Releases](https://github.com/AIWander/Programmer-Wander/releases/latest)
 2. Extract to a stable folder, e.g. `C:\tools\programmer\`
@@ -66,13 +83,7 @@ Install `programmer.exe` first, then add this repository through the local host'
    ```
 4. Restart your AI host
 
-### Option 2 — MSI installer
-
-1. Download `programmer-wander-windows-x64.msi` from [Releases](https://github.com/AIWander/Programmer-Wander/releases/latest)
-2. Run the MSI (UAC prompt; click Allow)
-3. The MSI installs `programmer.exe` and adds its directory to `PATH`; it does not modify AI-host configuration
-4. In a new terminal, run `programmer.exe install --target <host>` for each host you explicitly want to register
-5. Restart only the host whose configuration you changed
+Verify any download against `SHA256SUMS` on the release.
 
 ### Option 3 — Have your AI install it for you
 
