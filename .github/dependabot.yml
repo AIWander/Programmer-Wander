@@ -1,0 +1,24 @@
+# Dependabot configuration for Programmer-Wander
+# Tracks GitHub Actions and the root Rust crate (single crate: /Cargo.toml).
+# Dependabot Security Updates (org-level toggle) additionally handles
+# vulnerability fixes; these blocks cover routine version updates.
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "rust"
