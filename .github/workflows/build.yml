@@ -99,7 +99,7 @@ jobs:
       # checksum, and sign them in one place. (Was: per-arch direct attach.)
       - name: Upload artifacts
         if: hashFiles('*.zip') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ github.event.repository.name }}-windows-${{ matrix.target.arch }}
           path: |
