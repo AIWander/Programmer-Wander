@@ -138,8 +138,8 @@ async fn handle_request(method: &str, id: Option<Value>, params: Option<Value>) 
                         "tools": {}
                     },
                     "serverInfo": {
-                        "name": "antigravity-rs",
-                        "version": "1.0.0"
+                        "name": env!("CARGO_PKG_NAME"),
+                        "version": env!("CARGO_PKG_VERSION")
                     }
                 })),
                 error: None,
@@ -212,5 +212,19 @@ async fn handle_request(method: &str, id: Option<Value>, params: Option<Value>) 
                 }),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::handle_request;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn initialize_identity_comes_from_package_metadata() {
+        let response = handle_request("initialize", Some(json!(1)), None).await;
+        let result = response.result.expect("initialize result");
+        assert_eq!(result["serverInfo"]["name"], env!("CARGO_PKG_NAME"));
+        assert_eq!(result["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
     }
 }

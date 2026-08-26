@@ -1,13 +1,13 @@
 [package]
 name = "programmer"
-version = "0.2.0-alpha"
+version = "2.0.0-rc.1"
 edition = "2021"
 authors = ["Joseph Wander <contact@aiwander.ai>"]
 license = "Apache-2.0"
-description = "MCP server giving any AI a complete Rust + Windows dev shell"
+description = "Portable Windows developer MCP server with an exact 49-tool contract"
 repository = "https://github.com/AIWander/Programmer-Wander"
 readme = "README.md"
-rust-version = "1.75"
+rust-version = "1.85"
 
 [[bin]]
 name = "programmer"

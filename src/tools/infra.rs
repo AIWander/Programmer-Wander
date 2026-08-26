@@ -1,79 +1,95 @@
-//! Infrastructure tools - process listing and project preflight checks.
-//! Generic versions for any user (no CPC-specific paths).
+//! Generic process health and project preflight checks.
 
 use anyhow::Result;
 use serde_json::{json, Value};
-use std::process::Stdio;
+use std::path::PathBuf;
+use sysinfo::{PidExt, ProcessExt, System, SystemExt};
 
-async fn run_ps(cmd: &str) -> String {
-    match tokio::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", cmd])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-    {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        Err(e) => format!("error: {}", e),
-    }
-}
-
-/// List running processes, optionally filtered by name substring(s).
-/// args: { "name_filter": ["chrome", "node"] } — case-insensitive contains match
 pub async fn server_health(args: Value) -> Result<Value> {
-    let name_filter = args.get("name_filter").and_then(|v| v.as_array());
-    let ps = r#"Get-Process | Select-Object ProcessName,Id,@{N='MB';E={[math]::Round($_.WorkingSet64/1MB,1)}},StartTime | ConvertTo-Json"#;
-    let output = run_ps(ps).await;
-    let parsed: Value = serde_json::from_str(&output).unwrap_or(json!({"raw": output}));
-
-    if let Some(filter) = name_filter {
-        let names: Vec<String> = filter
-            .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
-            .collect();
-        if let Some(arr) = parsed.as_array() {
-            let filtered: Vec<&Value> = arr
+    let requested: Vec<String> = args
+        .get("servers")
+        .and_then(|value| value.as_array())
+        .map(|values| {
+            values
                 .iter()
-                .filter(|p| {
-                    p["ProcessName"]
+                .filter_map(|value| {
+                    value
                         .as_str()
-                        .map(|n| names.iter().any(|f| n.to_lowercase().contains(f)))
-                        .unwrap_or(false)
+                        .filter(|name| !name.trim().is_empty())
+                        .map(String::from)
                 })
-                .collect();
-            return Ok(json!({"processes": filtered}));
-        }
-    }
-    Ok(json!({"processes": parsed}))
+                .collect()
+        })
+        .filter(|values: &Vec<String>| !values.is_empty())
+        .unwrap_or_else(|| vec![env!("CARGO_PKG_NAME").to_string()]);
+
+    let system = System::new_all();
+    let servers: Vec<Value> =
+        requested
+            .iter()
+            .map(|requested_name| {
+                let needle = requested_name.trim_end_matches(".exe").to_ascii_lowercase();
+                let matches: Vec<Value> = system.processes().iter().filter_map(|(pid, process)| {
+            let process_name = process.name().trim_end_matches(".exe");
+            if process_name.to_ascii_lowercase().contains(&needle) {
+                Some(json!({
+                    "name": process.name(),
+                    "pid": pid.as_u32(),
+                    "memory_mb": ((process.memory() as f64) / 1024.0 * 10.0).round() / 10.0,
+                }))
+            } else {
+                None
+            }
+        }).collect();
+                json!({
+                    "query": requested_name,
+                    "alive": !matches.is_empty(),
+                    "matches": matches,
+                })
+            })
+            .collect();
+
+    Ok(json!({"servers": servers, "query_count": requested.len()}))
 }
 
-/// Stub fallback resolver — returns no fallback. The Programmer-Wander build
-/// doesn't ship with a curated fallback table; users override at integration time.
-pub async fn tool_fallback(args: Value) -> Result<Value> {
-    let tool = args["tool"].as_str().unwrap_or("");
-    Ok(json!({
-        "tool": tool,
-        "fallback": null,
-        "note": "Programmer-Wander does not ship a curated fallback table. Provide your own resolver if needed."
-    }))
-}
+// tool_fallback retired 2026-07-29: its hardcoded map referenced retired servers and never
+// read the real fallback map (Volumes/logs/error_fallbacks.json). Replaced by the 3-strike
+// PostToolUse hook + autonomous:error_get_fallback.
 
-/// Pre-deploy checks for a Cargo project at a user-supplied path.
-/// args: { "path": "C:\\path\\to\\project" } — checks Cargo.toml + src/ presence
 pub async fn preflight_deploy(args: Value) -> Result<Value> {
-    let path = args["path"].as_str().unwrap_or("");
-    if path.is_empty() {
-        anyhow::bail!("path is required (path to Cargo project root)");
+    let requested = args
+        .get("path")
+        .and_then(|value| value.as_str())
+        .or_else(|| args.get("target").and_then(|value| value.as_str()));
+    let mut project_path = requested
+        .map(PathBuf::from)
+        .unwrap_or(std::env::current_dir()?);
+    if project_path.is_file() {
+        project_path = project_path
+            .parent()
+            .map(PathBuf::from)
+            .ok_or_else(|| anyhow::anyhow!("project path has no parent"))?;
     }
 
-    let path_p = std::path::Path::new(path);
-    let cargo_exists = path_p.join("Cargo.toml").exists();
-    let src_exists = path_p.join("src").is_dir();
+    let resolved = project_path
+        .canonicalize()
+        .unwrap_or_else(|_| project_path.clone());
+    let manifest_path = resolved.join("Cargo.toml");
+    let source_path = resolved.join("src");
+    let manifest_valid = std::fs::read_to_string(&manifest_path)
+        .map(|content| content.lines().any(|line| line.trim() == "[package]"))
+        .unwrap_or(false);
+    let ready =
+        resolved.is_dir() && source_path.is_dir() && manifest_path.is_file() && manifest_valid;
 
     Ok(json!({
-        "path": path,
-        "cargo_toml_exists": cargo_exists,
-        "src_dir_exists": src_exists,
-        "ready_to_build": cargo_exists && src_exists,
+        "path": resolved,
+        "ready": ready,
+        "checks": {
+            "project_directory_exists": resolved.is_dir(),
+            "source_directory_exists": source_path.is_dir(),
+            "cargo_manifest_exists": manifest_path.is_file(),
+            "cargo_manifest_has_package": manifest_valid,
+        }
     }))
 }

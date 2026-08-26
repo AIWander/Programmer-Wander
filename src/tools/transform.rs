@@ -7,13 +7,62 @@ use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 use zip::write::FileOptions;
 use zip::{ZipArchive, ZipWriter};
 
 // ============ TOKEN-SAVING TRANSFORMS (from mcp-windows) ============
+
+// ---- Mode-flip survivors (2026-07-29 rebuild): base64 / json / convert ----
+// Three entries that differed only by a direction word collapsed into mode params.
+
+/// base64(mode=encode|decode, input)
+pub async fn base64_tool(args: Value) -> Result<Value> {
+    let mode = args["mode"].as_str().unwrap_or("encode");
+    let input = args["input"]
+        .as_str()
+        .or(args["text"].as_str())
+        .or(args["encoded"].as_str())
+        .unwrap_or("");
+    match mode {
+        "encode" => base64_encode(json!({"text": input})).await,
+        "decode" => base64_decode(json!({"encoded": input})).await,
+        _ => Ok(json!({"error": "mode must be encode or decode"})),
+    }
+}
+
+/// json(mode=format|minify, input, indent)
+pub async fn json_tool(args: Value) -> Result<Value> {
+    let mode = args["mode"].as_str().unwrap_or("format");
+    let input = args["input"]
+        .as_str()
+        .or(args["json_string"].as_str())
+        .unwrap_or("");
+    match mode {
+        "format" => json_format(json!({"json_string": input, "indent": args["indent"]})).await,
+        "minify" => json_minify(json!({"json_string": input})).await,
+        _ => Ok(json!({"error": "mode must be format or minify"})),
+    }
+}
+
+/// convert(from=csv|json, to=json|csv, input, delimiter)
+pub async fn convert_tool(args: Value) -> Result<Value> {
+    let from = args["from"].as_str().unwrap_or("");
+    let to = args["to"].as_str().unwrap_or("");
+    let input = args["input"]
+        .as_str()
+        .or(args["csv_string"].as_str())
+        .or(args["json_array"].as_str())
+        .unwrap_or("");
+    let delimiter = args["delimiter"].clone();
+    match (from, to) {
+        ("csv", "json") => csv_to_json(json!({"csv_string": input, "delimiter": delimiter})).await,
+        ("json", "csv") => json_to_csv(json!({"json_array": input, "delimiter": delimiter})).await,
+        _ => Ok(json!({"error": "supported conversions: from=csv,to=json or from=json,to=csv"})),
+    }
+}
 
 /// Pretty-print JSON
 pub async fn json_format(args: Value) -> Result<Value> {
@@ -234,19 +283,32 @@ pub async fn hash_file(args: Value) -> Result<Value> {
     }
 }
 
-/// File/directory stats without reading content
+/// File/directory stats without reading content.
+/// Union of the former get_file_info (node metadata: timestamps, readonly, is_dir/is_file)
+/// and file_stats (aggregation: counts, total_size) - proven complementary by live diff
+/// 2026-07-29; a remove-as-duplicate would have lost one axis.
 pub async fn file_stats(args: Value) -> Result<Value> {
     let path = args["path"].as_str().unwrap_or("");
     let recursive = args["recursive"].as_bool().unwrap_or(false);
 
     let meta = fs::metadata(path)?;
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs());
+    let readonly = meta.permissions().readonly();
 
     if meta.is_file() {
         Ok(json!({
             "type": "file",
             "path": path,
             "size": meta.len(),
-            "size_human": format_size(meta.len())
+            "size_human": format_size(meta.len()),
+            "is_file": true,
+            "is_dir": false,
+            "modified_unix": modified,
+            "readonly": readonly
         }))
     } else {
         let mut total_size: u64 = 0;
@@ -277,7 +339,11 @@ pub async fn file_stats(args: Value) -> Result<Value> {
             "directories": dir_count,
             "total_size": total_size,
             "total_size_human": format_size(total_size),
-            "recursive": recursive
+            "recursive": recursive,
+            "is_file": false,
+            "is_dir": true,
+            "modified_unix": modified,
+            "readonly": readonly
         }))
     }
 }
@@ -296,38 +362,6 @@ fn format_size(bytes: u64) -> String {
     } else {
         format!("{} B", bytes)
     }
-}
-
-/// Extract specific line range - saves reading entire file
-pub async fn extract_lines(args: Value) -> Result<Value> {
-    let path = args["path"].as_str().unwrap_or("");
-    let start = args["start"].as_i64().unwrap_or(1) as usize;
-    let end = args["end"].as_i64().unwrap_or(-1);
-
-    let file = fs::File::open(path)?;
-    let reader = BufReader::new(file);
-
-    let lines: Vec<String> = reader
-        .lines()
-        .enumerate()
-        .filter_map(|(i, line)| {
-            let line_num = i + 1;
-            let in_range = line_num >= start && (end < 0 || line_num <= end as usize);
-            if in_range {
-                line.ok()
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    Ok(json!({
-        "path": path,
-        "start": start,
-        "end": if end < 0 { "EOF".to_string() } else { end.to_string() },
-        "lines": lines,
-        "count": lines.len()
-    }))
 }
 
 /// Grep - search files for pattern
@@ -474,7 +508,7 @@ fn main() {
 
 fn handle_request(request: &Value) -> Value {
     match request["method"].as_str().unwrap_or("") {
-        "initialize" => json!({"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": env!("CARGO_PKG_NAME"), "version": "0.1.0"}}),
+        "initialize" => json!({"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": env!("CARGO_PKG_NAME"), "version": env!("CARGO_PKG_VERSION")}}),
         "tools/list" => json!({"tools": tools::get_definitions()}),
         "tools/call" => {
             let name = request["params"]["name"].as_str().unwrap_or("");

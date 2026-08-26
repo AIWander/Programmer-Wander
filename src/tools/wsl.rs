@@ -1,22 +1,21 @@
 //! WSL tools - Run commands and background jobs in WSL
 //! Background jobs stay alive because programmer.exe holds the child process handle
 
-use super::security;
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
 use std::process::Stdio;
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracing::info;
 
+use super::{runtime, security};
+
 static JOBS: Mutex<Option<HashMap<String, WslJob>>> = Mutex::new(None);
 
 struct WslJob {
     pid: u32,
-    log_file: String,
     status_file: String,
     started: Instant,
 }
@@ -30,11 +29,34 @@ fn get_jobs() -> std::sync::MutexGuard<'static, Option<HashMap<String, WslJob>>>
 }
 
 fn gen_job_id() -> String {
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    format!("wsl_{}", ts)
+    format!("wsl_{}", uuid::Uuid::new_v4().simple())
+}
+
+fn sanitize_job_id(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .take(96)
+        .collect()
+}
+
+fn wsl_state_dir() -> std::path::PathBuf {
+    runtime::state_path("wsl")
+}
+
+fn job_paths(job_id: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let safe_id = sanitize_job_id(job_id);
+    let state_dir = wsl_state_dir();
+    (
+        state_dir.join(format!("wsl_bg_{}.log", safe_id)),
+        state_dir.join(format!("wsl_bg_{}.status", safe_id)),
+    )
 }
 
 pub async fn run(args: Value) -> Result<Value> {
@@ -48,17 +70,20 @@ pub async fn run(args: Value) -> Result<Value> {
         anyhow::bail!("command is required");
     }
 
-    let safety_warning = security::enforce_command_safety(command)?;
+    security::enforce_command_safety(command, "wsl_run")?;
 
     info!("WSL run: {}", &command[..command.len().min(80)]);
 
-    let log_path = format!(
-        "C:\\temp\\wsl_run_{}.log",
+    let state_dir = wsl_state_dir();
+    let _ = fs::create_dir_all(&state_dir);
+    let log_path = state_dir.join(format!(
+        "wsl_run_{}_{}.log",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
-            .as_secs()
-    );
+            .as_secs(),
+        uuid::Uuid::new_v4().simple()
+    ));
 
     let start = Instant::now();
 
@@ -90,8 +115,7 @@ pub async fn run(args: Value) -> Result<Value> {
                 "duration_secs": duration,
                 "total_lines": line_count,
                 "log": log_path,
-                "tail": tail.join("\n"),
-                "safety_warning": safety_warning
+                "tail": tail.join("\n")
             }))
         }
         Ok(Err(e)) => Ok(json!({"error": format!("WSL launch failed: {}", e)})),
@@ -105,16 +129,17 @@ pub async fn bg(args: Value) -> Result<Value> {
         anyhow::bail!("command is required");
     }
 
-    let safety_warning = security::enforce_command_safety(command)?;
+    security::enforce_command_safety(command, "wsl_bg")?;
 
     let job_id = args
         .get("job_name")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+        .map(sanitize_job_id)
         .unwrap_or_else(gen_job_id);
 
-    let log_file = format!("C:\\temp\\wsl_bg_{}.log", &job_id);
-    let status_file = format!("C:\\temp\\wsl_bg_{}.status", &job_id);
+    let state_dir = wsl_state_dir();
+    fs::create_dir_all(&state_dir)?;
+    let (log_file, status_file) = job_paths(&job_id);
 
     let _ = fs::write(&status_file, r#"{"status":"running"}"#);
 
@@ -136,8 +161,7 @@ pub async fn bg(args: Value) -> Result<Value> {
                     job_id.clone(),
                     WslJob {
                         pid,
-                        log_file: log_file.clone(),
-                        status_file: status_file.clone(),
+                        status_file: status_file.to_string_lossy().into_owned(),
                         started: Instant::now(),
                     },
                 );
@@ -169,8 +193,7 @@ pub async fn bg(args: Value) -> Result<Value> {
                 "pid": pid,
                 "log": log_file,
                 "status_file": status_file,
-                "poll": format!("wsl_status(job_id='{}')", job_id),
-                "safety_warning": safety_warning
+                "poll": format!("wsl_status(job_id='{}')", job_id)
             }))
         }
         Err(e) => {
@@ -200,13 +223,12 @@ pub async fn status(args: Value) -> Result<Value> {
                 result.push(json!({
                     "job_id": id,
                     "pid": job.pid,
-                    "log": job.log_file,
                     "elapsed_secs": job.started.elapsed().as_secs(),
                     "status": st,
                 }));
             }
         }
-        if let Ok(entries) = fs::read_dir("C:\\temp") {
+        if let Ok(entries) = fs::read_dir(wsl_state_dir()) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
                 if name.starts_with("wsl_bg_") && name.ends_with(".status") {
@@ -226,13 +248,12 @@ pub async fn status(args: Value) -> Result<Value> {
         return Ok(json!({"jobs": result}));
     }
 
-    let status_file = format!("C:\\temp\\wsl_bg_{}.status", job_id);
-    let log_file = format!("C:\\temp\\wsl_bg_{}.log", job_id);
+    let (log_file, status_file) = job_paths(job_id);
 
     let st = fs::read_to_string(&status_file)
         .unwrap_or_else(|_| r#"{"error":"job not found"}"#.to_string());
 
-    let tail = if Path::new(&log_file).exists() {
+    let tail = if log_file.exists() {
         let content = fs::read_to_string(&log_file).unwrap_or_default();
         let lines: Vec<&str> = content.lines().collect();
         let start = if lines.len() > tail_n {
@@ -245,7 +266,7 @@ pub async fn status(args: Value) -> Result<Value> {
         String::new()
     };
 
-    let total_lines = if Path::new(&log_file).exists() {
+    let total_lines = if log_file.exists() {
         fs::read_to_string(&log_file)
             .unwrap_or_default()
             .lines()
@@ -268,9 +289,9 @@ pub async fn log_output(args: Value) -> Result<Value> {
         anyhow::bail!("job_id is required");
     }
 
-    let log_file = format!("C:\\temp\\wsl_bg_{}.log", job_id);
-    if !Path::new(&log_file).exists() {
-        return Ok(json!({"error": format!("Log not found: {}", log_file)}));
+    let (log_file, _) = job_paths(job_id);
+    if !log_file.exists() {
+        return Ok(json!({"error": format!("Log not found: {}", log_file.display())}));
     }
 
     let content = fs::read_to_string(&log_file)?;

@@ -1,7 +1,7 @@
 {
   "name": "programmer-wander",
-  "version": "0.1.0-alpha",
-  "description": "Programmer-Wander skills and MCP registration for local Windows development work.",
+  "version": "2.0.0-rc.1",
+  "description": "Programmer-Wander skills and MCP registration for its exact 49-tool local Windows development surface.",
   "author": {
     "name": "AIWander",
     "url": "https://github.com/AIWander"
@@ -9,16 +9,16 @@
   "homepage": "https://github.com/AIWander/Programmer-Wander",
   "repository": "https://github.com/AIWander/Programmer-Wander",
   "license": "Apache-2.0",
-  "keywords": ["programmer-wander", "development", "windows", "git", "shell", "mcp"],
+  "keywords": ["programmer-wander", "development", "windows", "cmd", "shell", "mcp"],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Programmer-Wander",
     "shortDescription": "Local Windows development tools for AI hosts.",
-    "longDescription": "Connects an installed Programmer-Wander Rust executable and teaches agents to route file, shell, session, Git, WSL, HTTP, transformation, and system work by ability.",
+    "longDescription": "Connects an installed Programmer-Wander Rust executable and teaches agents to route its exact 49-tool file, shell, session, WSL, HTTP, transformation, safety, and system surface by ability.",
     "developerName": "AIWander",
     "category": "Developer Tools",
-    "capabilities": ["Files", "Shell", "Git", "WSL", "HTTP", "Transforms"],
+    "capabilities": ["Files", "Shell", "Sessions", "WSL", "HTTP", "Transforms", "Safety"],
     "websiteURL": "https://github.com/AIWander/Programmer-Wander",
     "defaultPrompt": [
       "Use Programmer-Wander to inspect, change, and verify this project.",

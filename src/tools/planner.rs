@@ -10,22 +10,6 @@
 
 use serde_json::{json, Value};
 
-#[allow(dead_code)]
-pub fn get_definition() -> Value {
-    json!({
-        "name": "plan",
-        "description": "Analyze a task and return its ingredients: what tools are needed, which depend on each other, and whether breadcrumbing is warranted. Does NOT prescribe step order - Claude decides execution. Any server's planner can lead or hand off.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task": {"type": "string", "description": "What needs to be done"},
-                "context": {"type": "string", "description": "Additional context (current topic, recent actions, etc.)"}
-            },
-            "required": ["task"]
-        }
-    })
-}
-
 pub fn plan(args: &Value) -> Value {
     let task = args.get("task").and_then(|v| v.as_str()).unwrap_or("");
     let context = args.get("context").and_then(|v| v.as_str()).unwrap_or("");
@@ -199,7 +183,7 @@ fn build_recipe(task: &str, _ctx: &str) -> Value {
         ],
         "requirements": {
             "before": {
-                "psession_run": ["psession_create must exist", "preflight_deploy must pass", "backup current binary to C:\\CPC\\backups\\"],
+                "psession_run": ["psession_create must exist", "preflight_deploy must pass", "backup the current binary to an operator-selected archive directory"],
                 "any_build": ["NEVER use one-shot powershell with -Wait for cargo builds"]
             },
             "after": {
