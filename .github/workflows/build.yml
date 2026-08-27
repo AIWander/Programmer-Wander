@@ -93,7 +93,13 @@ jobs:
             -arch $arch `
             -out wix/main.wixobj
           & light.exe wix/main.wixobj -out "target/wix/$repo-windows-$arch.msi"
-          Get-ChildItem "target/wix/*.msi" | Format-List
+          # Stage the MSI beside the zip at the repo root so the uploaded artifact
+          # is FLAT. upload-artifact roots an artifact at the common ancestor of all
+          # its path patterns: mixing "*.zip" (root) with "target/wix/*.msi" (nested)
+          # roots it at the repo root and preserves the "target/wix/" prefix, which
+          # lands a "target" DIRECTORY in dist/ for the release job.
+          Copy-Item "target/wix/$repo-windows-$arch.msi" -Destination "." -Force
+          Get-ChildItem "*.msi" | Format-List
 
       # Upload zip (+ MSI on tags) as artifacts so the release job can aggregate,
       # checksum, and sign them in one place. (Was: per-arch direct attach.)
@@ -104,7 +110,7 @@ jobs:
           name: ${{ github.event.repository.name }}-windows-${{ matrix.target.arch }}
           path: |
             *.zip
-            target/wix/*.msi
+            *.msi
           if-no-files-found: ignore
 
   # Tag-only: aggregate every arch's artifacts, generate SHA256SUMS, sign the
@@ -126,7 +132,18 @@ jobs:
           merge-multiple: true
       - name: Generate SHA256SUMS
         working-directory: dist
-        run: sha256sum * > SHA256SUMS
+        # Checksum the release files explicitly. A bare "sha256sum *" also picks up
+        # any directory that ends up in dist/ and dies with "Is a directory".
+        run: |
+          shopt -s nullglob
+          files=(*.zip *.msi)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::no .zip/.msi artifacts found in dist/ - nothing to release"
+            ls -laR
+            exit 1
+          fi
+          sha256sum "${files[@]}" > SHA256SUMS
+          cat SHA256SUMS
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
       - name: Sign artifacts + checksums (keyless / Sigstore)
