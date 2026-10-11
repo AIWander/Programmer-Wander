@@ -7,11 +7,19 @@ use std::path::Path;
 use tokio::fs;
 use tracing::info;
 
-/// Read file with search/lines/max_kb support (enhanced to match mcp-windows raw_read)
+/// Read file with search/range/tail/max_kb support.
+/// Absorbs smart_read (search/range routing), extract_lines (range), and tail_file
+/// (tail + since_bytes delta polling) per the 2026-07-29 rebuild.
 pub async fn read_file(args: Value) -> Result<Value> {
     let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
     let search = args.get("search").and_then(|v| v.as_str());
-    let lines_param = args.get("lines").and_then(|v| v.as_str());
+    // "range" is the canonical name post-rebuild; "lines" accepted as legacy synonym
+    let lines_param = args
+        .get("range")
+        .and_then(|v| v.as_str())
+        .or_else(|| args.get("lines").and_then(|v| v.as_str()));
+    let tail = args.get("tail").and_then(|v| v.as_u64());
+    let since_bytes = args.get("since_bytes").and_then(|v| v.as_u64());
     let max_kb = args.get("max_kb").and_then(|v| v.as_i64()).unwrap_or(100);
     // Legacy offset/length support
     let offset = args.get("offset").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -29,6 +37,15 @@ pub async fn read_file(args: Value) -> Result<Value> {
     let metadata = std::fs::metadata(path)?;
     let file_size = metadata.len();
     let file_kb = file_size / 1024;
+
+    // TAIL MODE: last N lines + byte offset; since_bytes returns only NEW content (delta polling)
+    if tail.is_some() || since_bytes.is_some() {
+        return Ok(tail_read(
+            path,
+            tail.unwrap_or(50) as usize,
+            since_bytes.unwrap_or(0),
+        ));
+    }
 
     // SEARCH MODE: grep for pattern
     if let Some(pattern) = search {
@@ -158,7 +175,77 @@ pub async fn read_file(args: Value) -> Result<Value> {
     }))
 }
 
-/// Write file with auto-directory creation
+/// Tail helper: last N lines + current byte offset; since_bytes > 0 returns only NEW content.
+/// Ported from the retired tail_file tool - the since_bytes/byte_offset delta-polling
+/// contract is load-bearing (log watching) and must not be lost.
+fn tail_read(path: &str, max_lines: usize, since_bytes: u64) -> Value {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) => return json!({"error": format!("Cannot open file: {}", e)}),
+    };
+
+    let total_bytes = match file.metadata() {
+        Ok(m) => m.len(),
+        Err(e) => return json!({"error": format!("Cannot read metadata: {}", e)}),
+    };
+
+    if since_bytes > 0 {
+        if since_bytes >= total_bytes {
+            return json!({
+                "lines": [],
+                "byte_offset": total_bytes,
+                "total_bytes": total_bytes,
+                "new_content": false
+            });
+        }
+        if let Err(e) = file.seek(SeekFrom::Start(since_bytes)) {
+            return json!({"error": format!("Seek failed: {}", e)});
+        }
+        let mut new_data = String::new();
+        if let Err(e) = file.read_to_string(&mut new_data) {
+            return json!({"error": format!("Read failed: {}", e)});
+        }
+        let lines: Vec<&str> = new_data.lines().collect();
+        let tail: Vec<&str> = if lines.len() > max_lines {
+            lines[lines.len() - max_lines..].to_vec()
+        } else {
+            lines
+        };
+        return json!({
+            "lines": tail,
+            "byte_offset": total_bytes,
+            "total_bytes": total_bytes,
+            "new_content": true
+        });
+    }
+
+    let read_size: u64 = (64 * 1024).min(total_bytes);
+    let start_pos = total_bytes.saturating_sub(read_size);
+    if let Err(e) = file.seek(SeekFrom::Start(start_pos)) {
+        return json!({"error": format!("Seek failed: {}", e)});
+    }
+    let mut buf = String::new();
+    if let Err(e) = file.read_to_string(&mut buf) {
+        return json!({"error": format!("Read failed: {}", e)});
+    }
+    let lines: Vec<&str> = buf.lines().collect();
+    let tail: Vec<&str> = if lines.len() > max_lines {
+        lines[lines.len() - max_lines..].to_vec()
+    } else {
+        lines
+    };
+    json!({
+        "lines": tail,
+        "byte_offset": total_bytes,
+        "total_bytes": total_bytes,
+        "new_content": true
+    })
+}
+
+/// Write file with auto-directory creation. mode=append streams via OpenOptions
+/// (adopted from the retired append_file - no read-whole-file rewrite, no race).
 pub async fn write_file(args: Value) -> Result<Value> {
     let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
     let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
@@ -177,8 +264,10 @@ pub async fn write_file(args: Value) -> Result<Value> {
     }
 
     if mode == "append" {
-        let existing = fs::read_to_string(path).await.unwrap_or_default();
-        fs::write(path, format!("{}{}", existing, content)).await?;
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+        file.write_all(content.as_bytes())?;
     } else {
         fs::write(path, content).await?;
     }
@@ -312,32 +401,6 @@ pub async fn move_file(args: Value) -> Result<Value> {
     }))
 }
 
-/// Get file metadata
-pub async fn get_file_info(args: Value) -> Result<Value> {
-    let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-
-    if path.is_empty() {
-        anyhow::bail!("path is required");
-    }
-
-    let meta = fs::metadata(path).await?;
-    let modified = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs());
-
-    Ok(json!({
-        "success": true,
-        "path": path,
-        "size": meta.len(),
-        "is_file": meta.is_file(),
-        "is_dir": meta.is_dir(),
-        "modified_unix": modified,
-        "readonly": meta.permissions().readonly()
-    }))
-}
-
 /// Create directory recursively
 pub async fn create_directory(args: Value) -> Result<Value> {
     let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
@@ -421,21 +484,4 @@ pub async fn list_directory(args: Value) -> Result<Value> {
         "entries": entries,
         "total_entries": entries.len()
     }))
-}
-
-pub async fn append_file(args: Value) -> Result<Value> {
-    let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-    let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
-
-    if path.is_empty() {
-        anyhow::bail!("path is required");
-    }
-
-    use std::fs::OpenOptions;
-    use std::io::Write;
-
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    file.write_all(content.as_bytes())?;
-
-    Ok(json!({"success": true, "path": path, "bytes_appended": content.len()}))
 }

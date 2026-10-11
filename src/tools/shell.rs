@@ -1,6 +1,16 @@
-//! Shell Execution
+//! Shell execution + shell_session (simulated state session).
+//!
+//! 2026-07-29 rebuild (Stage 3): the 10 session_* verbs and their checkpoint/recover pair
+//! collapsed into shell_session(action=...). The session's entire state is tiny (cwd + env +
+//! history), so it is AUTO-PERSISTED to disk on every change and lazily reloaded on server
+//! start - crash recovery is free instead of being 6 tools.
+//!
+//! Defects fixed during the rewrite (found in the Step 0 source review):
+//! - session env vars were stored but never applied to spawned commands; now injected.
+//! - session_read_output was a placeholder; history now records real output tails.
+//! - shortcut_chain passed the wrong key and never worked; the merged shortcut fixes it,
+//!   and gains params + session_id on chained runs.
 
-use super::security;
 use anyhow::Result;
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
@@ -13,14 +23,34 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::info;
 
-const DEFAULT_TIMEOUT: u64 = 30;
+use super::{runtime, security};
 
-// Session storage
-static SESSIONS: Lazy<Arc<Mutex<HashMap<String, Session>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+const DEFAULT_TIMEOUT: u64 = 30;
+const OUTPUT_TAIL_CHARS: usize = 2000;
+// Session storage - lazily loads persisted sessions from the portable state directory,
+// which is what makes recovery after a crash/restart transparent.
+static SESSIONS: Lazy<Arc<Mutex<HashMap<String, Session>>>> = Lazy::new(|| {
+    let mut map = HashMap::new();
+    if let Ok(entries) = std::fs::read_dir(runtime::state_path("shell_sessions")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Ok(saved) = serde_json::from_str::<Value>(&content) {
+                        if let Some(id) = saved["session_id"].as_str() {
+                            map.insert(id.to_string(), Session::from_saved(&saved));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Arc::new(Mutex::new(map))
+});
 
 struct Session {
     cwd: String,
+    env: HashMap<String, String>,
     history: Vec<HistoryEntry>,
 }
 
@@ -29,9 +59,89 @@ struct HistoryEntry {
     command: String,
     exit_code: Option<i32>,
     timestamp: u64,
+    output_tail: String,
 }
 
-/// Execute shell command
+impl Session {
+    fn from_saved(saved: &Value) -> Session {
+        let cwd = saved["cwd"].as_str().map(String::from).unwrap_or_else(|| {
+            runtime::default_working_dir()
+                .to_string_lossy()
+                .into_owned()
+        });
+        let mut env = HashMap::new();
+        if let Some(obj) = saved["env"].as_object() {
+            for (k, v) in obj {
+                if let Some(val) = v.as_str() {
+                    env.insert(k.clone(), val.to_string());
+                }
+            }
+        }
+        let mut history = Vec::new();
+        if let Some(arr) = saved["history"].as_array() {
+            for h in arr {
+                history.push(HistoryEntry {
+                    command: h["command"].as_str().unwrap_or("").to_string(),
+                    exit_code: h["exit_code"].as_i64().map(|c| c as i32),
+                    timestamp: h["timestamp"].as_u64().unwrap_or(0),
+                    output_tail: h["output_tail"].as_str().unwrap_or("").to_string(),
+                });
+            }
+        }
+        Session { cwd, env, history }
+    }
+
+    fn to_saved(&self, session_id: &str) -> Value {
+        json!({
+            "session_id": session_id,
+            "cwd": self.cwd,
+            "env": self.env,
+            "history": self.history.iter().rev().take(50).rev().map(|h| json!({
+                "command": h.command,
+                "exit_code": h.exit_code,
+                "timestamp": h.timestamp,
+                "output_tail": h.output_tail,
+            })).collect::<Vec<_>>(),
+            "saved_at": chrono::Utc::now().to_rfc3339(),
+        })
+    }
+}
+
+fn sanitize_id(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn persist(session_id: &str, session: &Session) {
+    let state_dir = runtime::state_path("shell_sessions");
+    let _ = std::fs::create_dir_all(&state_dir);
+    let path = state_dir.join(format!("{}.json", sanitize_id(session_id)));
+    if let Ok(data) = serde_json::to_string_pretty(&session.to_saved(session_id)) {
+        let _ = std::fs::write(path, data);
+    }
+}
+
+fn unpersist(session_id: &str) {
+    let path =
+        runtime::state_path("shell_sessions").join(format!("{}.json", sanitize_id(session_id)));
+    let _ = std::fs::remove_file(path);
+}
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Execute a Windows Command Prompt command (the `cmd` tool).
 pub async fn execute(args: Value) -> Result<Value> {
     let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
     let timeout_secs = args
@@ -44,16 +154,19 @@ pub async fn execute(args: Value) -> Result<Value> {
         anyhow::bail!("command is required");
     }
 
-    let safety_warning = security::enforce_command_safety(command)?;
+    security::enforce_command_safety(command, "cmd")?;
 
     info!("Executing: {}", &command[..command.len().min(80)]);
 
-    // Get working directory from session if provided
-    let cwd = if let Some(sid) = session_id {
+    // Pull session cwd + env if a session is named
+    let (cwd, env) = if let Some(sid) = session_id {
         let sessions = SESSIONS.lock().await;
-        sessions.get(sid).map(|s| s.cwd.clone())
+        match sessions.get(sid) {
+            Some(s) => (Some(s.cwd.clone()), s.env.clone()),
+            None => (None, HashMap::new()),
+        }
     } else {
-        None
+        (None, HashMap::new())
     };
 
     let mut cmd = Command::new("cmd");
@@ -63,6 +176,10 @@ pub async fn execute(args: Value) -> Result<Value> {
 
     if let Some(dir) = &cwd {
         cmd.current_dir(dir);
+    }
+    // Session env vars are injected on top of the inherited environment
+    for (k, v) in &env {
+        cmd.env(k, v);
     }
 
     let result = timeout(Duration::from_secs(timeout_secs), cmd.output()).await;
@@ -74,18 +191,34 @@ pub async fn execute(args: Value) -> Result<Value> {
             let exit_code = output.status.code();
             let success = exit_code == Some(0);
 
-            // Record in session history
+            // Record in session history with a real output tail, then persist
             if let Some(sid) = session_id {
+                let combined = if stderr.is_empty() {
+                    stdout.clone()
+                } else {
+                    format!("{}\n[stderr] {}", stdout, stderr)
+                };
+                let tail: String = if combined.len() > OUTPUT_TAIL_CHARS {
+                    let start = combined.len() - OUTPUT_TAIL_CHARS;
+                    // avoid slicing mid-UTF-8-char
+                    let mut idx = start;
+                    while !combined.is_char_boundary(idx) {
+                        idx += 1;
+                    }
+                    combined[idx..].to_string()
+                } else {
+                    combined
+                };
+
                 let mut sessions = SESSIONS.lock().await;
                 if let Some(session) = sessions.get_mut(sid) {
                     session.history.push(HistoryEntry {
                         command: command.to_string(),
                         exit_code,
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_secs())
-                            .unwrap_or(0),
+                        timestamp: now_unix(),
+                        output_tail: tail,
                     });
+                    persist(sid, session);
                 }
             }
 
@@ -94,8 +227,7 @@ pub async fn execute(args: Value) -> Result<Value> {
                 "stdout": stdout,
                 "stderr": stderr,
                 "exit_code": exit_code,
-                "runtime": "completed",
-                "safety_warning": safety_warning
+                "runtime": "completed"
             }))
         }
         Ok(Err(e)) => Ok(json!({
@@ -109,26 +241,9 @@ pub async fn execute(args: Value) -> Result<Value> {
     }
 }
 
-/// Execute chain of commands, stop on first failure
-pub async fn chain(args: Value) -> Result<Value> {
-    let commands: Vec<&str> = args
-        .get("commands")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
-        .unwrap_or_default();
-    let session_id = args
-        .get("session_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("default");
-    let stop_on_error = args
-        .get("stop_on_error")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-
-    if commands.is_empty() {
-        anyhow::bail!("commands array is required");
-    }
-
+/// Execute a sequence of raw commands in a session, stop on first failure by default.
+/// (Internal engine for shortcut mode=run with commands=[]; formerly the `chain` tool.)
+async fn run_commands(commands: &[String], session_id: &str, stop_on_error: bool) -> Result<Value> {
     let mut results = Vec::new();
     let mut all_success = true;
     let mut failed_at: Option<usize> = None;
@@ -163,89 +278,41 @@ pub async fn chain(args: Value) -> Result<Value> {
     }))
 }
 
-/// Create terminal session
+/// Create a state session.
 pub async fn create_session(args: Value) -> Result<Value> {
     let name = args.get("name").and_then(|v| v.as_str());
-    let default_cwd = std::env::current_dir()
-        .ok()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "C:\\".to_string());
     let cwd = args
         .get("cwd")
         .and_then(|v| v.as_str())
-        .unwrap_or(&default_cwd);
+        .map(String::from)
+        .unwrap_or_else(|| {
+            runtime::default_working_dir()
+                .to_string_lossy()
+                .into_owned()
+        });
 
     let session_id = name
-        .map(String::from)
+        .map(|n| sanitize_id(n))
         .unwrap_or_else(|| format!("session_{:08x}", rand::random::<u32>()));
 
     let mut sessions = SESSIONS.lock().await;
-    sessions.insert(
-        session_id.clone(),
-        Session {
-            cwd: cwd.to_string(),
-            history: Vec::new(),
-        },
-    );
+    let session = Session {
+        cwd: cwd.clone(),
+        env: HashMap::new(),
+        history: Vec::new(),
+    };
+    persist(&session_id, &session);
+    sessions.insert(session_id.clone(), session);
 
     info!("Created session: {}", session_id);
 
     Ok(json!({
         "success": true,
         "session_id": session_id,
-        "cwd": cwd
+        "cwd": cwd,
+        "persisted": true
     }))
 }
-
-/// List active sessions
-pub async fn list_sessions() -> Result<Value> {
-    let sessions = SESSIONS.lock().await;
-    let list: Vec<Value> = sessions
-        .iter()
-        .map(|(id, s)| {
-            json!({
-                "session_id": id,
-                "cwd": s.cwd,
-                "history_count": s.history.len()
-            })
-        })
-        .collect();
-
-    Ok(json!({
-        "success": true,
-        "sessions": list,
-        "count": list.len()
-    }))
-}
-
-/// Destroy session
-pub async fn destroy_session(args: Value) -> Result<Value> {
-    let session_id = args
-        .get("session_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    if session_id.is_empty() {
-        anyhow::bail!("session_id is required");
-    }
-
-    let mut sessions = SESSIONS.lock().await;
-    if sessions.remove(session_id).is_some() {
-        Ok(json!({
-            "success": true,
-            "session_id": session_id
-        }))
-    } else {
-        Ok(json!({
-            "success": false,
-            "error": "Session not found"
-        }))
-    }
-}
-
-// Environment variables per session
-static SESSION_ENV: Lazy<Arc<Mutex<HashMap<String, HashMap<String, String>>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 // Predefined shortcuts
 fn get_shortcuts() -> HashMap<&'static str, Vec<&'static str>> {
@@ -269,329 +336,328 @@ fn get_shortcuts() -> HashMap<&'static str, Vec<&'static str>> {
     shortcuts
 }
 
-/// Set environment variable in session
-pub async fn set_env(args: Value) -> Result<Value> {
-    let session_id = args
-        .get("session_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("default");
-    let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
-    let value = args.get("value").and_then(|v| v.as_str()).unwrap_or("");
-
-    if key.is_empty() {
-        anyhow::bail!("key is required");
-    }
-
-    let mut env_map = SESSION_ENV.lock().await;
-    let session_env = env_map
-        .entry(session_id.to_string())
-        .or_insert_with(HashMap::new);
-    session_env.insert(key.to_string(), value.to_string());
-
-    Ok(json!({
-        "success": true,
-        "session_id": session_id,
-        "key": key,
-        "value": value
-    }))
+fn substitute_params(commands: &[&str], params: &Value) -> Vec<String> {
+    commands
+        .iter()
+        .map(|cmd| {
+            let mut result = cmd.to_string();
+            if let Some(obj) = params.as_object() {
+                for (key, value) in obj {
+                    let placeholder = format!("${}", key);
+                    if let Some(v) = value.as_str() {
+                        result = result.replace(&placeholder, v);
+                    }
+                }
+            }
+            result
+        })
+        .collect()
 }
 
-/// Get environment variable from session
-pub async fn get_env(args: Value) -> Result<Value> {
-    let session_id = args
-        .get("session_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("default");
-    let key = args.get("key").and_then(|v| v.as_str());
+/// shortcut(mode=run|list, names=[], commands=[], params=, session_id=, stop_on_error=)
+/// Absorbs the former shortcut / chain / shortcut_chain / list_shortcut.
+/// Axis is saved-name versus raw-command: names=[] runs saved shortcuts (params substituted),
+/// commands=[] runs raw commands; both run inside session_id with stop_on_error control.
+pub async fn shortcut(args: Value) -> Result<Value> {
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("run");
 
-    let env_map = SESSION_ENV.lock().await;
-
-    if let Some(k) = key {
-        // Get specific key
-        let session_value = env_map.get(session_id).and_then(|m| m.get(k)).cloned();
-        let value = session_value.or_else(|| std::env::var(k).ok());
-
-        Ok(json!({
-            "success": true,
-            "key": k,
-            "value": value
-        }))
-    } else {
-        // Get all session env vars
-        let vars: HashMap<String, String> = env_map.get(session_id).cloned().unwrap_or_default();
-
-        Ok(json!({
-            "success": true,
-            "session_id": session_id,
-            "env": vars
-        }))
-    }
-}
-
-/// Get command history for session
-pub async fn history(args: Value) -> Result<Value> {
-    let session_id = args
-        .get("session_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("default");
-    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
-
-    let sessions = SESSIONS.lock().await;
-
-    if let Some(session) = sessions.get(session_id) {
-        let history: Vec<Value> = session
-            .history
+    if mode == "list" {
+        let shortcuts = get_shortcuts();
+        let list: Vec<Value> = shortcuts
             .iter()
-            .rev()
-            .take(limit)
-            .map(|h| {
+            .map(|(name, cmds)| {
                 json!({
-                    "command": h.command,
-                    "exit_code": h.exit_code,
-                    "timestamp": h.timestamp
+                    "name": name,
+                    "commands": cmds,
+                    "description": format!("{} step workflow", cmds.len())
                 })
             })
             .collect();
-
-        Ok(json!({
+        return Ok(json!({
             "success": true,
-            "session_id": session_id,
-            "history": history,
-            "count": history.len()
-        }))
-    } else {
-        Ok(json!({
-            "success": false,
-            "error": "Session not found"
-        }))
+            "shortcuts": list,
+            "count": list.len()
+        }));
     }
-}
 
-/// Read recent output from session (placeholder - real impl would buffer output)
-pub async fn read_output(args: Value) -> Result<Value> {
+    if mode != "run" {
+        return Ok(json!({"success": false, "error": "mode must be run or list"}));
+    }
+
     let session_id = args
         .get("session_id")
         .and_then(|v| v.as_str())
         .unwrap_or("default");
-    let lines = args.get("lines").and_then(|v| v.as_u64()).unwrap_or(50);
-
-    // In real implementation, would maintain output buffer per session
-    // For now, return last command output if available
-    let sessions = SESSIONS.lock().await;
-
-    if let Some(session) = sessions.get(session_id) {
-        let last_commands: Vec<&str> = session
-            .history
-            .iter()
-            .rev()
-            .take(5)
-            .map(|h| h.command.as_str())
-            .collect();
-
-        Ok(json!({
-            "success": true,
-            "session_id": session_id,
-            "note": "Output buffering not implemented - showing recent commands",
-            "recent_commands": last_commands,
-            "requested_lines": lines
-        }))
-    } else {
-        Ok(json!({
-            "success": false,
-            "error": "Session not found"
-        }))
-    }
-}
-
-/// Run predefined shortcut
-pub async fn shortcut(args: Value) -> Result<Value> {
-    let session_id = args
-        .get("session_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("default");
-    let shortcut_name = args
-        .get("shortcut_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let stop_on_error = args
+        .get("stop_on_error")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     let params = &args["params"];
 
-    let shortcuts = get_shortcuts();
-
-    if let Some(commands) = shortcuts.get(shortcut_name) {
-        // Substitute parameters
-        let substituted: Vec<String> = commands
-            .iter()
-            .map(|cmd| {
-                let mut result = cmd.to_string();
-                if let Some(obj) = params.as_object() {
-                    for (key, value) in obj {
-                        let placeholder = format!("${}", key);
-                        if let Some(v) = value.as_str() {
-                            result = result.replace(&placeholder, v);
-                        }
-                    }
-                }
-                result
-            })
-            .collect();
-
-        // Execute as chain
-        chain(json!({
-            "session_id": session_id,
-            "commands": substituted,
-            "stop_on_error": true
-        }))
-        .await
-    } else {
-        Ok(json!({
-            "success": false,
-            "error": format!("Unknown shortcut: {}", shortcut_name)
-        }))
-    }
-}
-
-/// List available shortcuts
-pub async fn list_shortcuts() -> Result<Value> {
-    let shortcuts = get_shortcuts();
-
-    let list: Vec<Value> = shortcuts
-        .iter()
-        .map(|(name, cmds)| {
-            json!({
-                "name": name,
-                "commands": cmds,
-                "description": format!("{} step workflow", cmds.len())
-            })
+    // Legacy single-name compatibility: shortcut_name= folds into names=[]
+    let mut names: Vec<String> = args
+        .get("names")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
         })
-        .collect();
-
-    Ok(json!({
-        "success": true,
-        "shortcuts": list,
-        "count": list.len()
-    }))
-}
-
-/// Save session state to checkpoint file for crash recovery
-pub async fn session_checkpoint(args: Value) -> Result<Value> {
-    let session_id = args
-        .get("session_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("default");
-    let default_path = format!("C:/temp/session_{}.checkpoint", session_id);
-    let checkpoint_path = args
-        .get("checkpoint_path")
-        .and_then(|v| v.as_str())
-        .unwrap_or(&default_path);
-
-    let sessions = SESSIONS.lock().await;
-    let session = match sessions.get(session_id) {
-        Some(s) => s,
-        None => return Ok(json!({"error": format!("Session '{}' not found", session_id)})),
-    };
-
-    // Get environment for this session
-    let env_map = SESSION_ENV.lock().await;
-    let env = env_map.get(session_id).cloned().unwrap_or_default();
-
-    // Build checkpoint data
-    let checkpoint = json!({
-        "session_id": session_id,
-        "cwd": session.cwd,
-        "env": env,
-        "history": session.history.iter().map(|h| &h.command).collect::<Vec<_>>(),
-        "saved_at": chrono::Utc::now().to_rfc3339(),
-    });
-
-    // Ensure directory exists
-    if let Some(parent) = std::path::Path::new(checkpoint_path).parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-
-    match std::fs::write(checkpoint_path, serde_json::to_string_pretty(&checkpoint)?) {
-        Ok(_) => Ok(json!({
-            "success": true,
-            "checkpoint_path": checkpoint_path,
-            "session_id": session_id,
-            "commands_saved": session.history.len()
-        })),
-        Err(e) => Ok(json!({"error": format!("Failed to write checkpoint: {}", e)})),
-    }
-}
-
-/// Recover session from checkpoint file
-pub async fn session_recover_from_file(args: Value) -> Result<Value> {
-    let checkpoint_path = match args.get("checkpoint_path").and_then(|v| v.as_str()) {
-        Some(p) => p,
-        None => return Ok(json!({"error": "checkpoint_path required"})),
-    };
-
-    // Read checkpoint file
-    let checkpoint_data = match std::fs::read_to_string(checkpoint_path) {
-        Ok(data) => data,
-        Err(e) => return Ok(json!({"error": format!("Failed to read checkpoint: {}", e)})),
-    };
-
-    let checkpoint: Value = match serde_json::from_str(&checkpoint_data) {
-        Ok(v) => v,
-        Err(e) => return Ok(json!({"error": format!("Invalid checkpoint format: {}", e)})),
-    };
-
-    let session_id = checkpoint["session_id"]
-        .as_str()
-        .unwrap_or("recovered")
-        .to_string();
-    let cwd = checkpoint["cwd"].as_str().unwrap_or("C:\\").to_string();
-
-    // Restore environment
-    let mut env: HashMap<String, String> = HashMap::new();
-    if let Some(saved_env) = checkpoint["env"].as_object() {
-        for (k, v) in saved_env {
-            if let Some(val) = v.as_str() {
-                env.insert(k.clone(), val.to_string());
-            }
+        .unwrap_or_default();
+    if names.is_empty() {
+        if let Some(n) = args.get("shortcut_name").and_then(|v| v.as_str()) {
+            names.push(n.to_string());
         }
     }
 
-    // Restore history
-    let mut history: Vec<HistoryEntry> = Vec::new();
-    if let Some(saved_history) = checkpoint["history"].as_array() {
-        for item in saved_history {
-            if let Some(cmd) = item.as_str() {
-                history.push(HistoryEntry {
-                    command: cmd.to_string(),
-                    exit_code: None,
-                    timestamp: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs(),
-                });
+    let raw_commands: Vec<String> = args
+        .get("commands")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if names.is_empty() && raw_commands.is_empty() {
+        anyhow::bail!("mode=run requires names=[] (saved shortcuts) or commands=[] (raw commands)");
+    }
+
+    // Expand saved shortcuts to their command lists, then append raw commands
+    let shortcuts = get_shortcuts();
+    let mut all_commands: Vec<String> = Vec::new();
+    let mut expanded: Vec<Value> = Vec::new();
+
+    for name in &names {
+        match shortcuts.get(name.as_str()) {
+            Some(cmds) => {
+                let substituted = substitute_params(cmds, params);
+                expanded.push(json!({"shortcut": name, "commands": substituted}));
+                all_commands.extend(substituted);
+            }
+            None => {
+                return Ok(json!({
+                    "success": false,
+                    "error": format!("Unknown shortcut: {}", name),
+                    "available": shortcuts.keys().collect::<Vec<_>>()
+                }));
             }
         }
     }
+    all_commands.extend(raw_commands);
 
-    // Create new session with restored state
-    let mut sessions = SESSIONS.lock().await;
-    sessions.insert(
-        session_id.clone(),
-        Session {
-            cwd: cwd.clone(),
-            history: history.clone(),
-        },
-    );
+    // Validate the complete expanded sequence before executing its first command.
+    for command in &all_commands {
+        security::enforce_command_safety(command, "shortcut")?;
+    }
 
-    // Restore environment
-    let mut env_map = SESSION_ENV.lock().await;
-    env_map.insert(session_id.clone(), env);
+    let mut result = run_commands(&all_commands, session_id, stop_on_error).await?;
+    if let Some(obj) = result.as_object_mut() {
+        if !expanded.is_empty() {
+            obj.insert("shortcuts_expanded".to_string(), json!(expanded));
+        }
+        obj.insert("session_id".to_string(), json!(session_id));
+    }
+    Ok(result)
+}
 
-    Ok(json!({
-        "success": true,
-        "session_id": session_id,
-        "recovered_from": checkpoint_path,
-        "saved_at": checkpoint["saved_at"],
-        "commands_restored": history.len(),
-        "cwd": cwd
-    }))
+/// shell_session(action=create|run|list|destroy|cd|env|history|read)
+/// The simulated state session: remembered cwd + env applied to each fresh command.
+/// State auto-persists below PROGRAMMER_STATE_DIR on every change.
+pub async fn shell_session(args: Value) -> Result<Value> {
+    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
+
+    match action {
+        "create" => create_session(args).await,
+
+        "run" => {
+            let session_id = args
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default");
+            let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            if command.is_empty() {
+                anyhow::bail!("command is required");
+            }
+            security::enforce_command_safety(command, "shell_session")?;
+            // Auto-create the session on first run so run-before-create just works
+            {
+                let sessions = SESSIONS.lock().await;
+                if !sessions.contains_key(session_id) {
+                    drop(sessions);
+                    let _ = create_session(json!({"name": session_id})).await;
+                }
+            }
+            execute(json!({
+                "command": command,
+                "timeout": args.get("timeout").cloned().unwrap_or(json!(DEFAULT_TIMEOUT)),
+                "session_id": session_id
+            }))
+            .await
+        }
+
+        "list" => {
+            let sessions = SESSIONS.lock().await;
+            let list: Vec<Value> = sessions
+                .iter()
+                .map(|(id, s)| {
+                    json!({
+                        "session_id": id,
+                        "cwd": s.cwd,
+                        "env_count": s.env.len(),
+                        "history_count": s.history.len()
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "success": true,
+                "sessions": list,
+                "count": list.len()
+            }))
+        }
+
+        "destroy" => {
+            let session_id = args
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if session_id.is_empty() {
+                anyhow::bail!("session_id is required");
+            }
+            let mut sessions = SESSIONS.lock().await;
+            if sessions.remove(session_id).is_some() {
+                unpersist(session_id);
+                Ok(json!({"success": true, "session_id": session_id}))
+            } else {
+                Ok(json!({"success": false, "error": "Session not found"}))
+            }
+        }
+
+        "cd" => {
+            let session_id = args
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            if session_id.is_empty() || path.is_empty() {
+                anyhow::bail!("session_id and path are required");
+            }
+            if !std::path::Path::new(path).exists() {
+                anyhow::bail!("Directory does not exist: {}", path);
+            }
+            let mut sessions = SESSIONS.lock().await;
+            match sessions.get_mut(session_id) {
+                Some(session) => {
+                    session.cwd = path.to_string();
+                    persist(session_id, session);
+                    Ok(json!({"success": true, "session_id": session_id, "cwd": path}))
+                }
+                None => anyhow::bail!("Session not found: {}", session_id),
+            }
+        }
+
+        "env" => {
+            let session_id = args
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default");
+            let key = args.get("key").and_then(|v| v.as_str());
+            let value = args.get("value").and_then(|v| v.as_str());
+
+            let mut sessions = SESSIONS.lock().await;
+            let session = match sessions.get_mut(session_id) {
+                Some(s) => s,
+                None => anyhow::bail!("Session not found: {}", session_id),
+            };
+
+            match (key, value) {
+                (Some(k), Some(v)) => {
+                    session.env.insert(k.to_string(), v.to_string());
+                    persist(session_id, session);
+                    Ok(json!({"success": true, "session_id": session_id, "key": k, "value": v}))
+                }
+                (Some(k), None) => {
+                    let session_value = session.env.get(k).cloned();
+                    let value = session_value.or_else(|| std::env::var(k).ok());
+                    Ok(json!({"success": true, "key": k, "value": value}))
+                }
+                (None, _) => {
+                    Ok(json!({"success": true, "session_id": session_id, "env": session.env}))
+                }
+            }
+        }
+
+        "history" => {
+            let session_id = args
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default");
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+            let sessions = SESSIONS.lock().await;
+            match sessions.get(session_id) {
+                Some(session) => {
+                    let history: Vec<Value> = session
+                        .history
+                        .iter()
+                        .rev()
+                        .take(limit)
+                        .map(|h| {
+                            json!({
+                                "command": h.command,
+                                "exit_code": h.exit_code,
+                                "timestamp": h.timestamp
+                            })
+                        })
+                        .collect();
+                    Ok(json!({
+                        "success": true,
+                        "session_id": session_id,
+                        "history": history,
+                        "count": history.len()
+                    }))
+                }
+                None => Ok(json!({"success": false, "error": "Session not found"})),
+            }
+        }
+
+        "read" => {
+            let session_id = args
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default");
+            let last = args.get("last").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+            let sessions = SESSIONS.lock().await;
+            match sessions.get(session_id) {
+                Some(session) => {
+                    let outputs: Vec<Value> = session
+                        .history
+                        .iter()
+                        .rev()
+                        .take(last)
+                        .map(|h| {
+                            json!({
+                                "command": h.command,
+                                "exit_code": h.exit_code,
+                                "output_tail": h.output_tail
+                            })
+                        })
+                        .collect();
+                    Ok(json!({
+                        "success": true,
+                        "session_id": session_id,
+                        "outputs": outputs,
+                        "count": outputs.len()
+                    }))
+                }
+                None => Ok(json!({"success": false, "error": "Session not found"})),
+            }
+        }
+
+        _ => anyhow::bail!(
+            "action must be one of: create, run, list, destroy, cd, env, history, read"
+        ),
+    }
 }
 
 pub async fn powershell(args: Value) -> Result<Value> {
@@ -605,7 +671,7 @@ pub async fn powershell(args: Value) -> Result<Value> {
         anyhow::bail!("command is required");
     }
 
-    let safety_warning = security::enforce_command_safety(command)?;
+    security::enforce_command_safety(command, "powershell")?;
 
     info!("PowerShell: {}", &command[..command.len().min(80)]);
 
@@ -627,8 +693,7 @@ pub async fn powershell(args: Value) -> Result<Value> {
                 "exit_code": output.status.code().unwrap_or(-1),
                 "stdout": stdout.trim(),
                 "stderr": stderr.trim(),
-                "success": output.status.success(),
-                "safety_warning": safety_warning
+                "success": output.status.success()
             }))
         }
         Ok(Err(e)) => Ok(json!({"error": e.to_string()})),
@@ -661,73 +726,4 @@ pub async fn md2docx(args: Value) -> Result<Value> {
         }
         Err(e) => Ok(json!({"error": e.to_string()})),
     }
-}
-
-pub async fn session_cd(args: Value) -> Result<Value> {
-    let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-    let session_id = args.get("session_id").and_then(|v| v.as_str());
-
-    if path.is_empty() {
-        anyhow::bail!("path is required");
-    }
-
-    let resolved = std::path::Path::new(path);
-    if !resolved.exists() {
-        anyhow::bail!("Directory does not exist: {}", path);
-    }
-
-    if let Some(sid) = session_id {
-        let mut sessions = SESSIONS.lock().await;
-        if let Some(session) = sessions.get_mut(sid) {
-            session.cwd = path.to_string();
-            return Ok(json!({"success": true, "session_id": sid, "cwd": path}));
-        }
-        anyhow::bail!("Session not found: {}", sid);
-    }
-
-    Ok(json!({"error": "session_id is required"}))
-}
-
-pub async fn shortcut_chain(args: Value) -> Result<Value> {
-    let shortcuts = args.get("shortcuts").and_then(|v| v.as_array());
-    let stop_on_error = args
-        .get("stop_on_error")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-
-    let shortcuts = match shortcuts {
-        Some(s) => s,
-        None => anyhow::bail!("shortcuts array is required"),
-    };
-
-    let mut results = Vec::new();
-    for (i, shortcut_val) in shortcuts.iter().enumerate() {
-        let shortcut_name = shortcut_val.as_str().unwrap_or("");
-        if shortcut_name.is_empty() {
-            continue;
-        }
-
-        let result = shortcut(json!({"name": shortcut_name})).await;
-        match result {
-            Ok(val) => {
-                let success = !val.get("error").is_some();
-                results.push(json!({"index": i, "shortcut": shortcut_name, "result": val, "success": success}));
-                if !success && stop_on_error {
-                    return Ok(
-                        json!({"completed": i, "total": shortcuts.len(), "stopped_on_error": true, "results": results}),
-                    );
-                }
-            }
-            Err(e) => {
-                results.push(json!({"index": i, "shortcut": shortcut_name, "error": e.to_string(), "success": false}));
-                if stop_on_error {
-                    return Ok(
-                        json!({"completed": i, "total": shortcuts.len(), "stopped_on_error": true, "results": results}),
-                    );
-                }
-            }
-        }
-    }
-
-    Ok(json!({"completed": shortcuts.len(), "total": shortcuts.len(), "results": results}))
 }
