@@ -1,0 +1,5 @@
+# Build outputs of pack.ps1. Binaries and bundles belong on Releases, not in git.
+build/
+dist/
+server/
+*.mcpb

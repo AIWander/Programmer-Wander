@@ -1,0 +1,254 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/schemas/mcpb-manifest-v0.3.schema.json",
+  "manifest_version": "0.3",
+  "name": "programmer",
+  "display_name": "Programmer (AIWander)",
+  "version": "2.0.0-rc.1",
+  "description": "A Windows dev shell for Claude: files, surgical edits, cmd/PowerShell, shell sessions, WSL jobs, search, transforms and HTTP, in one local binary.",
+  "long_description": "Programmer is a single Rust binary that gives Claude a developer shell on this Windows computer: read, write and surgically edit files; run cmd and PowerShell; keep state-carrying shell sessions and live REPL shells; run and poll WSL background jobs; search and grep; archive, diff, hash and bulk-transform files; make HTTP requests; and check ports, processes and the host.\n\n**What it can reach.** It runs locally over stdio as the signed-in Windows user and can read, change and run anything that account can. There is no folder restriction in this release. Commands pass through a built-in, target-aware safety policy (`security_check_cmd` shows the verdict), but you should still read destructive commands before approving them.\n\n**Privacy.** No account, no telemetry, no background service. It sends nothing anywhere on its own; it makes network requests only when Claude calls `http_request` or `port_check`. Its working state (audit log, sessions, screenshots) stays in a `.programmer` folder inside the extension folder.",
+  "author": {
+    "name": "AIWander",
+    "email": "contact@aiwander.ai",
+    "url": "https://github.com/AIWander"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AIWander/Programmer-Wander.git"
+  },
+  "homepage": "https://github.com/AIWander/Programmer-Wander",
+  "documentation": "https://github.com/AIWander/Programmer-Wander/blob/mcpb/desktop-extension-20261011/mcpb/README.md",
+  "support": "https://github.com/AIWander/Programmer-Wander/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/programmer.exe",
+    "mcp_config": {
+      "command": "${__dirname}/server/programmer.exe",
+      "args": [
+        "serve"
+      ],
+      "env": {}
+    }
+  },
+  "tools": [
+    {
+      "name": "read_file",
+      "description": "Read file with smart options: search for pattern, range of lines, tail with delta polling, or auto-truncate large files."
+    },
+    {
+      "name": "write_file",
+      "description": "Write or overwrite a file (creates parent directories); mode=append adds to the end."
+    },
+    {
+      "name": "edit_block",
+      "description": "Guarded single-file text replacement: exact literal match, fails unless the occurrence count equals expected_replacements."
+    },
+    {
+      "name": "copy_file",
+      "description": "Copy file with metadata preservation."
+    },
+    {
+      "name": "move_file",
+      "description": "Move or rename file."
+    },
+    {
+      "name": "create_dir",
+      "description": "Create directory recursively."
+    },
+    {
+      "name": "list_dir",
+      "description": "List directory contents recursively."
+    },
+    {
+      "name": "cmd",
+      "description": "Execute a Windows Command Prompt command through cmd.exe /C and return output with exit code."
+    },
+    {
+      "name": "powershell",
+      "description": "Execute a PowerShell command and return its output."
+    },
+    {
+      "name": "kill_process",
+      "description": "Kill process by PID."
+    },
+    {
+      "name": "list_process",
+      "description": "List running processes."
+    },
+    {
+      "name": "shortcut",
+      "description": "List saved shortcuts or run saved/raw command sequences in a session."
+    },
+    {
+      "name": "shell_session",
+      "description": "State-carrying shell session: remembered cwd and env applied to each fresh command (create, run, cd, env, history, read, destroy)."
+    },
+    {
+      "name": "live_shell",
+      "description": "Long-lived PowerShell or WSL process that holds a REPL and in-memory variables, with incremental reads."
+    },
+    {
+      "name": "search_file",
+      "description": "Search for files by name or content."
+    },
+    {
+      "name": "screenshot",
+      "description": "Take a screenshot for troubleshooting; returns the file path and metadata only."
+    },
+    {
+      "name": "system_info",
+      "description": "Get system info: OS, CPU, memory, disk."
+    },
+    {
+      "name": "clipboard_read",
+      "description": "Read from clipboard."
+    },
+    {
+      "name": "clipboard_write",
+      "description": "Write to clipboard."
+    },
+    {
+      "name": "md2docx",
+      "description": "Convert Markdown file to DOCX via pandoc."
+    },
+    {
+      "name": "wsl_run",
+      "description": "Run a command in WSL in the foreground; returns an output summary and log path."
+    },
+    {
+      "name": "wsl_bg",
+      "description": "Launch a WSL background job and return its job_id for polling with wsl_status."
+    },
+    {
+      "name": "wsl_status",
+      "description": "Check WSL background job status."
+    },
+    {
+      "name": "wsl_log",
+      "description": "Get full or partial log from a WSL background job."
+    },
+    {
+      "name": "archive_create",
+      "description": "Create archive (zip, tar, tar.gz, tar.bz2)."
+    },
+    {
+      "name": "archive_extract",
+      "description": "Extract archive (auto-detect format)."
+    },
+    {
+      "name": "transform_bulk_rename",
+      "description": "Regex-based batch rename."
+    },
+    {
+      "name": "transform_sync_dir",
+      "description": "Sync directories with modes: mirror, update, backup."
+    },
+    {
+      "name": "diff_file",
+      "description": "Create unified diff between two files."
+    },
+    {
+      "name": "transform_file",
+      "description": "Apply Python transform to matching files (requires python on PATH)."
+    },
+    {
+      "name": "base64",
+      "description": "Base64 encode or decode a string."
+    },
+    {
+      "name": "json",
+      "description": "Format (pretty-print) or minify JSON."
+    },
+    {
+      "name": "convert",
+      "description": "Convert tabular data between formats: csv to json (first row = headers) or json to csv."
+    },
+    {
+      "name": "transform_find_replace",
+      "description": "Bulk regex-capable find/replace across files, without an occurrence-count guard (use edit_block for guarded single edits)."
+    },
+    {
+      "name": "transform_hash_file",
+      "description": "Compute file checksum (MD5, SHA256)."
+    },
+    {
+      "name": "transform_scaffold",
+      "description": "Generate boilerplate project scaffolding."
+    },
+    {
+      "name": "grep",
+      "description": "Search files for pattern, return matching lines with context."
+    },
+    {
+      "name": "file_stats",
+      "description": "File/directory stats without reading content: node metadata (size, timestamps, readonly, is_dir) plus recursive directory aggregation (file/dir counts, total size)."
+    },
+    {
+      "name": "http_request",
+      "description": "Make an HTTP request; save=<path> downloads the body to disk with resume support."
+    },
+    {
+      "name": "port_check",
+      "description": "Test TCP connectivity to host:port and report whether it is open and the connect time."
+    },
+    {
+      "name": "security_check_cmd",
+      "description": "Evaluate a command with the same target-aware policy enforced by command-running tools."
+    },
+    {
+      "name": "security_audit_log",
+      "description": "View recent security audit log entries."
+    },
+    {
+      "name": "server_health",
+      "description": "Check running processes by server name without assuming an installation directory."
+    },
+    {
+      "name": "deploy_preflight",
+      "description": "Pre-deploy checks for a given project path (or the current project)."
+    },
+    {
+      "name": "config_validate_mcp",
+      "description": "Validate an MCP configuration file: structure and that each command exists."
+    },
+    {
+      "name": "plan",
+      "description": "Analyze a task and return its ingredients: tools needed, dependencies, breadcrumb recommendation."
+    },
+    {
+      "name": "sqlite_query",
+      "description": "Execute a read-only SQL query against a SQLite database."
+    },
+    {
+      "name": "registry_read",
+      "description": "Read Windows registry values from approved locations only."
+    },
+    {
+      "name": "doctor",
+      "description": "Per-host capability self-report: git present, WSL present (+distros), shells available, python/pandoc/cargo, state dirs, build profile."
+    }
+  ],
+  "tools_generated": false,
+  "prompts_generated": false,
+  "keywords": [
+    "mcp",
+    "dev-shell",
+    "windows",
+    "powershell",
+    "wsl",
+    "files",
+    "sessions",
+    "developer-tools",
+    "shell"
+  ],
+  "license": "Apache-2.0",
+  "privacy_policies": [
+    "https://github.com/AIWander/Programmer-Wander/blob/mcpb/desktop-extension-20261011/mcpb/PRIVACY.md"
+  ],
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": [
+      "win32"
+    ]
+  }
+}
