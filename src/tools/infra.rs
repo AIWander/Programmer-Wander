@@ -3,7 +3,7 @@
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use sysinfo::{PidExt, ProcessExt, System, SystemExt};
+use sysinfo::System;
 
 pub async fn server_health(args: Value) -> Result<Value> {
     let requested: Vec<String> = args
@@ -30,12 +30,15 @@ pub async fn server_health(args: Value) -> Result<Value> {
             .map(|requested_name| {
                 let needle = requested_name.trim_end_matches(".exe").to_ascii_lowercase();
                 let matches: Vec<Value> = system.processes().iter().filter_map(|(pid, process)| {
-            let process_name = process.name().trim_end_matches(".exe");
+            // sysinfo 0.33+ returns the name as an OsStr.
+            let name = process.name().to_string_lossy();
+            let process_name = name.trim_end_matches(".exe");
             if process_name.to_ascii_lowercase().contains(&needle) {
                 Some(json!({
-                    "name": process.name(),
+                    "name": name,
                     "pid": pid.as_u32(),
-                    "memory_mb": ((process.memory() as f64) / 1024.0 * 10.0).round() / 10.0,
+                    // memory() is in bytes.
+                    "memory_mb": ((process.memory() as f64) / (1024.0 * 1024.0) * 10.0).round() / 10.0,
                 }))
             } else {
                 None
