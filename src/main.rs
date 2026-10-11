@@ -16,6 +16,7 @@ mod tools;
 
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use tracing::Level;
 
@@ -126,21 +127,39 @@ impl Target {
     }
 
     fn config_path(&self) -> Option<PathBuf> {
+        self.config_path_from_roots(
+            non_empty_env_path("APPDATA"),
+            non_empty_env_path("USERPROFILE"),
+            dirs::config_dir(),
+            dirs::home_dir(),
+        )
+    }
+
+    fn config_path_from_roots(
+        &self,
+        appdata: Option<PathBuf>,
+        user_profile: Option<PathBuf>,
+        fallback_config: Option<PathBuf>,
+        fallback_home: Option<PathBuf>,
+    ) -> Option<PathBuf> {
         match self {
-            Target::ClaudeDesktop => {
-                // Windows: %APPDATA%\Claude\claude_desktop_config.json
-                dirs::config_dir().map(|p| p.join("Claude").join("claude_desktop_config.json"))
-            }
-            Target::ClaudeCode => {
-                // %USERPROFILE%\.claude\settings.json
-                dirs::home_dir().map(|p| p.join(".claude").join("settings.json"))
-            }
-            Target::LmStudio => {
-                // %USERPROFILE%\.lmstudio\mcp.json
-                dirs::home_dir().map(|p| p.join(".lmstudio").join("mcp.json"))
-            }
+            Target::ClaudeDesktop => appdata
+                .or(fallback_config)
+                .map(|p| p.join("Claude").join("claude_desktop_config.json")),
+            Target::ClaudeCode => user_profile
+                .or(fallback_home)
+                .map(|p| p.join(".claude").join("settings.json")),
+            Target::LmStudio => user_profile
+                .or(fallback_home)
+                .map(|p| p.join(".lmstudio").join("mcp.json")),
         }
     }
+}
+
+fn non_empty_env_path(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 fn install_or_uninstall(args: &[String], remove: bool) -> Result<()> {
@@ -230,6 +249,10 @@ fn apply_target(target: Target, exe_path: &str, remove: bool) -> Result<String> 
         .config_path()
         .with_context(|| format!("could not resolve config path for {}", target.name()))?;
 
+    apply_target_at_path(&config_path, exe_path, remove)
+}
+
+fn apply_target_at_path(config_path: &Path, exe_path: &str, remove: bool) -> Result<String> {
     // Detect: parent directory must exist (means the host app is installed)
     let parent = config_path
         .parent()
@@ -257,7 +280,7 @@ fn apply_target(target: Target, exe_path: &str, remove: bool) -> Result<String> 
         );
     }
 
-    backup_if_exists(&config_path)?;
+    let _backup = backup_if_exists(config_path)?;
     write_config_pretty(&config_path, &config)?;
 
     Ok(format!("{}", config_path.display()))
@@ -287,15 +310,62 @@ fn ensure_mcp_servers_map(config: &mut Value) -> &mut serde_json::Map<String, Va
         .expect("mcpServers should be an object after insertion")
 }
 
-fn backup_if_exists(path: &Path) -> Result<()> {
+fn backup_if_exists(path: &Path) -> Result<Option<PathBuf>> {
     if !path.exists() {
-        return Ok(());
+        return Ok(None);
     }
     let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let backup = path.with_extension(format!("pre_{}.bak", ts));
-    std::fs::copy(path, &backup)
-        .with_context(|| format!("backup failed: {} -> {}", path.display(), backup.display()))?;
-    Ok(())
+    backup_if_exists_with_stamp(path, &ts.to_string())
+}
+
+fn backup_if_exists_with_stamp(path: &Path, stamp: &str) -> Result<Option<PathBuf>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    for _ in 0..16 {
+        let backup = path.with_extension(format!("pre_{}_{}.bak", stamp, uuid::Uuid::new_v4()));
+        let mut destination = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&backup)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("backup create failed: {}", backup.display()));
+            }
+        };
+
+        let copy_result = (|| -> Result<()> {
+            let mut source = std::fs::File::open(path)
+                .with_context(|| format!("backup source open failed: {}", path.display()))?;
+            std::io::copy(&mut source, &mut destination).with_context(|| {
+                format!(
+                    "backup copy failed: {} -> {}",
+                    path.display(),
+                    backup.display()
+                )
+            })?;
+            destination
+                .sync_all()
+                .with_context(|| format!("backup flush failed: {}", backup.display()))?;
+            Ok(())
+        })();
+
+        if let Err(error) = copy_result {
+            drop(destination);
+            let _ = std::fs::remove_file(&backup);
+            return Err(error);
+        }
+        return Ok(Some(backup));
+    }
+
+    bail!(
+        "could not reserve a unique backup name for {}",
+        path.display()
+    )
 }
 
 fn write_config_pretty(path: &Path, config: &Value) -> Result<()> {
@@ -307,4 +377,145 @@ fn write_config_pretty(path: &Path, config: &Value) -> Result<()> {
         serde_json::to_string_pretty(config).context("failed to serialize config to JSON")?;
     std::fs::write(path, text).with_context(|| format!("write failed: {}", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_target_at_path, backup_if_exists_with_stamp, Target, SERVER_KEY};
+    use serde_json::Value;
+    use std::path::{Path, PathBuf};
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new(label: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "programmer_public_{}_{}",
+                label,
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&path).expect("create isolated test directory");
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn assert_inside(root: &Path, path: &Path) {
+        assert!(
+            path.starts_with(root),
+            "{} escaped isolated root {}",
+            path.display(),
+            root.display()
+        );
+    }
+
+    #[test]
+    fn explicit_profile_roots_win_over_fallbacks() {
+        let appdata = PathBuf::from(r"X:\Isolated\AppData\Roaming");
+        let profile = PathBuf::from(r"X:\Isolated\Profile");
+        let fallback_config = Some(PathBuf::from(r"C:\Real\AppData\Roaming"));
+        let fallback_home = Some(PathBuf::from(r"C:\Real\Profile"));
+
+        assert_eq!(
+            Target::ClaudeDesktop.config_path_from_roots(
+                Some(appdata.clone()),
+                Some(profile.clone()),
+                fallback_config.clone(),
+                fallback_home.clone(),
+            ),
+            Some(appdata.join("Claude").join("claude_desktop_config.json"))
+        );
+        assert_eq!(
+            Target::ClaudeCode.config_path_from_roots(
+                Some(PathBuf::from(r"X:\Unused")),
+                Some(profile.clone()),
+                fallback_config.clone(),
+                fallback_home.clone(),
+            ),
+            Some(profile.join(".claude").join("settings.json"))
+        );
+        assert_eq!(
+            Target::LmStudio.config_path_from_roots(
+                None,
+                Some(profile.clone()),
+                fallback_config.clone(),
+                fallback_home.clone(),
+            ),
+            Some(profile.join(".lmstudio").join("mcp.json"))
+        );
+        assert_eq!(
+            Target::ClaudeDesktop.config_path_from_roots(
+                None,
+                None,
+                fallback_config,
+                fallback_home,
+            ),
+            Some(
+                PathBuf::from(r"C:\Real\AppData\Roaming")
+                    .join("Claude")
+                    .join("claude_desktop_config.json"),
+            )
+        );
+    }
+
+    #[test]
+    fn install_and_uninstall_writes_stay_inside_supplied_profile() {
+        let root = TestDir::new("profile");
+        let appdata = root.0.join("AppData").join("Roaming");
+        let profile = root.0.join("Profile");
+        let executable = r"X:\Portable\programmer.exe";
+
+        for target in Target::all() {
+            let config_path = target
+                .config_path_from_roots(Some(appdata.clone()), Some(profile.clone()), None, None)
+                .expect("isolated config path");
+            assert_inside(&root.0, &config_path);
+            std::fs::create_dir_all(config_path.parent().expect("config parent"))
+                .expect("create fake host directory");
+
+            apply_target_at_path(&config_path, executable, false).expect("isolated install");
+            let installed: Value = serde_json::from_str(
+                &std::fs::read_to_string(&config_path).expect("read installed config"),
+            )
+            .expect("parse installed config");
+            assert_eq!(installed["mcpServers"][SERVER_KEY]["command"], executable);
+
+            apply_target_at_path(&config_path, executable, true).expect("isolated uninstall");
+            let uninstalled: Value = serde_json::from_str(
+                &std::fs::read_to_string(&config_path).expect("read uninstalled config"),
+            )
+            .expect("parse uninstalled config");
+            assert!(uninstalled["mcpServers"].get(SERVER_KEY).is_none());
+        }
+
+        for entry in walkdir::WalkDir::new(&root.0) {
+            let entry = entry.expect("walk isolated profile");
+            assert_inside(&root.0, entry.path());
+        }
+    }
+
+    #[test]
+    fn same_second_backups_are_unique_and_complete() {
+        let root = TestDir::new("backup");
+        let config = root.0.join("host.json");
+        std::fs::write(&config, b"original").expect("write source config");
+
+        let first = backup_if_exists_with_stamp(&config, "20260826_000000")
+            .expect("first backup")
+            .expect("first backup path");
+        let second = backup_if_exists_with_stamp(&config, "20260826_000000")
+            .expect("second backup")
+            .expect("second backup path");
+
+        assert_ne!(first, second);
+        assert_inside(&root.0, &first);
+        assert_inside(&root.0, &second);
+        assert_eq!(std::fs::read(first).expect("first bytes"), b"original");
+        assert_eq!(std::fs::read(second).expect("second bytes"), b"original");
+    }
 }

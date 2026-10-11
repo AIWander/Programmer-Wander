@@ -2,10 +2,18 @@
 
 > An MCP server that gives any AI a complete Rust + Windows dev shell.
 
-**Status:** free, public, and alpha. Built for [Claude Desktop](https://claude.ai/download), [Cowork](https://claude.ai/cowork), [LM Studio](https://lmstudio.ai), [Claude Code](https://claude.ai/code), and any host that speaks MCP.
+**Status:** free, public, and release-candidate. Built for [Claude Desktop](https://claude.ai/download), [LM Studio](https://lmstudio.ai), [Claude Code](https://claude.ai/code), and local hosts that speak MCP.
 
 **Part of [CPC](https://github.com/AIWander) (Copy Paste Compute).** Programmer-Wander is
 one member of the free core trio alongside AI-Hands and Voice-Command.
+
+## Optional hands-free add-on
+
+[Voice-Command v3.0.0](https://github.com/AIWander/Voice-Command/releases/tag/v3.0.0)
+is the separate, free headset companion for people who want to speak while Programmer
+does local work. Programmer does not require Voice. Voice requires the user's own
+microphone permission and local setup; using either product from a web or mobile AI
+also requires an authenticated remote connector to the Windows host.
 
 [![Build](https://github.com/AIWander/Programmer-Wander/actions/workflows/build.yml/badge.svg)](https://github.com/AIWander/Programmer-Wander/actions)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
@@ -17,29 +25,31 @@ one member of the free core trio alongside AI-Hands and Voice-Command.
 
 | Ability group | Count | Purpose |
 |---|---:|---|
-| **Files and text** | 18 | Read, edit, search, inspect, archive, and convert local files |
-| **Shells and sessions** | 28 | One-shot, persistent, shortcut, and recovery-aware command execution |
-| **Git** | 12 | Local and remote repository workflows |
+| **Files** | 7 | Read, write, edit, copy, move, create, and list local files |
+| **Shell** | 5 | Command Prompt, PowerShell, shortcuts, and process control |
+| **Sessions** | 2 | Remembered command context and a real long-lived shell |
+| **Search** | 1 | Search files by name or content |
+| **System** | 5 | Screenshots, system info, clipboard, and Markdown conversion |
 | **WSL** | 4 | Foreground and background Linux execution from Windows |
-| **HTTP and webhooks** | 8 | Requests, downloads, scraping, ports, and local callback routes |
-| **Transformations and search** | 14 | Bulk, structured-data, encoding, scaffold, and search operations |
-| **System and monitoring** | 14 | Processes, watchers, clipboard, registry, SQLite, screenshots, and notifications |
-| **Security, infrastructure, and planning** | 7 | Command checks, audits, health, fallback, deployment preflight, and plans |
+| **Transforms and stats** | 14 | Archives, structured data, encoding, diffs, scaffolds, and bulk changes |
+| **Network** | 2 | HTTP requests and port checks |
+| **Guard** | 2 | Command safety evaluation and privacy-safe audit records |
+| **Infra and meta** | 7 | Process health, preflight, config validation, planning, SQLite, registry, and doctor |
 
-105 tools in the current source registry, each description tagged with its category (`[Files]`, `[Git]`, `[Guard]`, ...) and listed in a curated workbench order, so tool lists read grouped in any host. No external dependencies. Single static-linked .exe. Works standalone — does not require any other MCP server.
+Every supported build exposes exactly 49 unique tools. The same names appear in `tools/list` and the dispatch surface: `cmd` is present, and no feature flag adds hidden tools. Programmer is one executable and does not require another MCP server; individual abilities such as WSL or Markdown conversion still require the corresponding OS program.
 
 Skills and optional guard hooks ship from the companion repository
 [AIWander/aiprogrammer](https://github.com/AIWander/aiprogrammer) — install with
 `claude plugin marketplace add AIWander/aiprogrammer`, then pick either the `programmer`
-profile (five skills plus inert, reviewable guard-hook templates) or `programmer-skills`
+profile (skills plus inert, reviewable guard-hook templates) or `programmer-skills`
 (skills only). The repository root here is additionally its own plugin package (see
 "Optional plugin surface" below).
 
 ## Safety model
 
-Programmer-Wander is a powerful local dev shell. If your AI host can call it, the AI can read and write files, run shell commands, use git, call WSL, and operate on your clipboard. Install it only for AI clients you trust, and review the tools you enable.
+Programmer-Wander is a powerful local dev shell. If your AI host can call it, the AI can read and write files, run commands, call WSL, and operate on your clipboard. Install it only for AI clients you trust, and review the tools you enable.
 
-Command-entry tools (`run`, `bash`, `powershell`, `smart_exec`, `chain`, `psession_run`, `wsl_run`, and `wsl_bg`) run through `security_check_cmd` before execution. Critical destructive patterns are blocked and logged; recursive delete-style commands must target an obviously disposable path such as `target/`, `build/`, `tmp/`, or `.cache/`.
+Command-entry tools (`cmd`, `powershell`, `shortcut`, `shell_session`, `live_shell`, `wsl_run`, and `wsl_bg`) enforce the same target-aware safety policy used by `security_check_cmd`. Critical destructive patterns are blocked and logged without recording the command body; every recursive-delete target must stay inside an explicitly disposable directory such as `target/`, `build/`, `tmp/`, or `.cache/`.
 
 AIWander tools are local, user-authorized MCP capability surfaces. They do not grant an AI new permissions by themselves. They expose tools the user explicitly installs and enables. Sensitive actions should be confirmed by the user, credentials should stay in the OS keyring or local vault, and demos should use mock data.
 
@@ -50,42 +60,28 @@ AIWander tools are local, user-authorized MCP capability surfaces. They do not g
 The repository root is also a Codex- and Claude-compatible plugin package. It includes two skills with separate jobs:
 
 - `programmer-getting-started` installs, connects, verifies, and troubleshoots the MCP process.
-- `programmer` routes active development work across the 105-tool contract by ability.
+- `programmer` routes active development work across the exact 49-tool contract by ability.
 
 Install `programmer.exe` first, then add this repository through the local host's plugin flow. The included `.mcp.json` uses `programmer.exe` from `PATH`, so it contains no machine-specific user path. The plugin does not silently modify another AI's hooks or config; see [the host application guide](instructions/APPLY_TO_AI_HOSTS.md) for host-specific guidance.
 
-### Option 1 — Signed installer (recommended)
+### Option 1 — Signed portable release candidate (recommended)
 
-Two flavors, both Authenticode-signed. Pick one from
-[Releases](https://github.com/AIWander/Programmer-Wander/releases/latest):
+The v2 release candidate ships as Authenticode-signed portable ZIPs. It does not
+claim installer acceptance yet. Use the exact [v2.0.0-rc.1 prerelease](https://github.com/AIWander/Programmer-Wander/releases/tag/v2.0.0-rc.1), not the older `latest` alpha release.
 
-| Installer | What it installs |
-|---|---|
-| `Programmer-Wander-Setup-x64.exe` (or `-arm64`) | **With plugins** — the server, the five skills, and both plugin profiles |
-| `Programmer-Wander-Setup-x64-server-only.exe` | **Without plugins** — the server alone, nothing written to `~/.claude/skills` |
-
-Either flavor detects your AI hosts, offers to register Claude Desktop and Claude
-Code for you, and opens a short onboarding page when it finishes. They share an
-install identity, so one upgrades the other. Restart any host whose configuration
-changed.
-
-Chose server-only and want the skills later? `claude plugin marketplace add AIWander/aiprogrammer`.
-
-### Option 2 — Portable zip
-
-1. Download `programmer-wander-windows-x64.zip` (or `arm64`) from [Releases](https://github.com/AIWander/Programmer-Wander/releases/latest)
+1. Download `programmer-wander-v2.0.0-rc.1-windows-x64.zip` (or `arm64`) from that prerelease
 2. Extract to a stable folder, e.g. `C:\tools\programmer\`
 3. Register with your AI host:
    ```powershell
    C:\tools\programmer\programmer.exe install --target claude-desktop
-   # or: --target lm-studio, --target cowork, --target claude-code
+   # or: --target lm-studio, --target claude-code
    # Advanced: --target all registers every detected host.
    ```
 4. Restart your AI host
 
 Verify any download against `SHA256SUMS` on the release.
 
-### Option 3 — Have your AI install it for you
+### Option 2 — Have your AI install it for you
 
 Open Claude / ChatGPT / your local LLM and paste:
 
@@ -108,10 +104,11 @@ if (Test-Path "$env:USERPROFILE\.claude\settings.json")         { $hosts += "cla
 Write-Host "Arch: $arch | Hosts detected: $($hosts -join ', ')"
 ```
 
-### 2. Download latest release (portable)
+### 2. Download the exact release candidate (portable)
 
 ```powershell
-$url = "https://github.com/AIWander/Programmer-Wander/releases/latest/download/programmer-wander-windows-$arch.zip"
+$version = "v2.0.0-rc.1"
+$url = "https://github.com/AIWander/Programmer-Wander/releases/download/$version/programmer-wander-$version-windows-$arch.zip"
 Invoke-WebRequest $url -OutFile $env:TEMP\programmer.zip
 New-Item -ItemType Directory -Force -Path C:\tools\programmer | Out-Null
 Expand-Archive $env:TEMP\programmer.zip -DestinationPath C:\tools\programmer -Force
@@ -144,18 +141,18 @@ Remove-Item C:\tools\programmer -Recurse -Force
 
 ## State directory
 
-`programmer` keeps its local session state, file watchers, and recovery checkpoints in `./.programmer/` relative to the exe. This makes the install fully portable — copy the exe + its `./.programmer/` folder to a different machine and your state goes with it.
+`programmer` keeps local session state, logs, screenshots, and recovery checkpoints in `.programmer/` beside the executable. Set `PROGRAMMER_STATE_DIR` to use a different directory. If the executable directory cannot be resolved, Programmer safely falls back to `.programmer/` under the current directory.
 
 ## Build from source
 
-```bash
+```console
 git clone https://github.com/AIWander/Programmer-Wander
 cd Programmer-Wander
 cargo build --release
 # Binary at: target/release/programmer.exe
 ```
 
-Requires Rust 1.75+.
+Requires Rust 1.85+.
 
 ## Upgrade: UniMan ($5)
 
