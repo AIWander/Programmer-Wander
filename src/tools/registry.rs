@@ -1,23 +1,6 @@
 use serde_json::{json, Map, Value};
 use winreg::{enums::*, RegKey, RegValue};
 
-#[allow(dead_code)]
-pub fn get_definitions() -> Vec<Value> {
-    vec![json!({
-        "name": "registry_read",
-        "description": "Read Windows registry values from approved locations only.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "key": { "type": "string", "description": "Full registry path, e.g. HKLM\\SOFTWARE\\Microsoft" },
-                "value_name": { "type": "string", "description": "Optional specific value name. Empty string reads the default value." },
-                "recursive": { "type": "boolean", "description": "Include one level of subkeys.", "default": false }
-            },
-            "required": ["key"]
-        }
-    })]
-}
-
 pub fn execute(name: &str, args: &Value) -> Value {
     match name {
         "registry_read" => registry_read(args),
