@@ -21,7 +21,7 @@ Read [the host application guide](../../instructions/APPLY_TO_AI_HOSTS.md) when 
 
 - Run `programmer.exe --version` in a terminal to prove the executable resolves.
 - Inspect the host's MCP status or logs for a successful stdio launch.
-- Treat live `tools/list` as authoritative. The repository revision that introduced this skill defines 105 unique tools in `src/tools/mod.rs`; a different live count means the binary and source revision differ, not necessarily that startup failed.
+- Treat live `tools/list` as authoritative. This release candidate defines exactly 49 unique tools in `src/tools/mod.rs`, including `cmd`; a different live count or legacy command-tool name means the binary and source revision differ.
 - Confirm the target architecture when Windows reports an invalid executable or immediate process exit.
 
 ## Diagnose by layer
