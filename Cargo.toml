@@ -7,7 +7,7 @@ license = "Apache-2.0"
 description = "Portable Windows developer MCP server with an exact 49-tool contract"
 repository = "https://github.com/AIWander/Programmer-Wander"
 readme = "README.md"
-rust-version = "1.85"
+rust-version = "1.95"
 
 [[bin]]
 name = "programmer"

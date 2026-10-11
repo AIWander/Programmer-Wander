@@ -152,7 +152,7 @@ cargo build --release
 # Binary at: target/release/programmer.exe
 ```
 
-Requires Rust 1.85+.
+Requires Rust 1.95+.
 
 ## Upgrade: UniMan ($5)
 
