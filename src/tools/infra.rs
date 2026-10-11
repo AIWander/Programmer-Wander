@@ -37,7 +37,8 @@ pub async fn server_health(args: Value) -> Result<Value> {
                 Some(json!({
                     "name": name,
                     "pid": pid.as_u32(),
-                    "memory_mb": ((process.memory() as f64) / 1024.0 * 10.0).round() / 10.0,
+                    // memory() is in bytes.
+                    "memory_mb": ((process.memory() as f64) / (1024.0 * 1024.0) * 10.0).round() / 10.0,
                 }))
             } else {
                 None
