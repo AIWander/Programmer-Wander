@@ -686,7 +686,7 @@ pub async fn archive(args: Value) -> Result<Value> {
         "zip" => {
             let file = fs::File::create(&output_path)?;
             let mut zip = ZipWriter::new(file);
-            let options = FileOptions::default()
+            let options = FileOptions::<()>::default()
                 .compression_method(zip::CompressionMethod::Deflated)
                 .unix_permissions(0o755);
 
@@ -790,9 +790,10 @@ pub async fn extract(args: Value) -> Result<Value> {
 
         for i in 0..archive.len() {
             let mut file = archive.by_index(i)?;
-            let outpath = Path::new(&destination).join(file.name());
+            let entry_name = file.name()?.to_string();
+            let outpath = Path::new(&destination).join(&entry_name);
 
-            if file.name().ends_with('/') {
+            if entry_name.ends_with('/') {
                 fs::create_dir_all(&outpath)?;
             } else {
                 if let Some(p) = outpath.parent() {
@@ -1133,4 +1134,39 @@ print(result)
         "files": transformed,
         "error_details": errors
     }))
+}
+
+#[cfg(test)]
+mod zip_roundtrip_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn zip_archive_round_trips_a_file() {
+        let root = std::env::temp_dir().join(format!("pw-zip-rt-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let input = root.join("input.txt");
+        fs::write(&input, b"zip round trip").unwrap();
+        let output = root.join("out.zip");
+        let dest = root.join("extracted");
+
+        let written = archive(json!({
+            "paths": [input.to_str().unwrap()],
+            "output": output.to_str().unwrap(),
+            "format": "zip"
+        }))
+        .await
+        .unwrap();
+        assert_eq!(written["success"], json!(true), "{written}");
+
+        let read = extract(json!({
+            "archive_path": output.to_str().unwrap(),
+            "destination": dest.to_str().unwrap()
+        }))
+        .await
+        .unwrap();
+        assert_eq!(read["files_extracted"], json!(1), "{read}");
+        assert_eq!(fs::read(dest.join("input.txt")).unwrap(), b"zip round trip");
+        let _ = fs::remove_dir_all(&root);
+    }
 }
